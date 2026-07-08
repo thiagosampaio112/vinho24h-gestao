@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#3d0a1f" />
+  <meta name="description" content="Gestão interna das adegas Vinho 24 Horas: estoque, compras e fornecedores." />
+  <title>Vinho 24H · Gestão</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
+</head>
+<body>
+
+  <!-- Cabeçalho -->
+  <header class="topo">
+    <div class="topo-marca">
+      <span class="marca-vinho">VINHO</span><span class="marca-24h">24H</span>
+      <span class="marca-modulo">Gestão</span>
+    </div>
+    <div class="topo-modo" id="topo-modo" title="Fonte dos dados"></div>
+  </header>
+
+  <!-- ====================== ABA: ESTOQUE ====================== -->
+  <section id="aba-estoque" class="aba">
+    <div class="painel-resumo" id="painel-resumo"></div>
+
+    <div class="busca-wrap">
+      <input id="busca" class="busca" type="search" inputmode="search"
+             placeholder="Buscar por nome, uva ou fornecedor…" autocomplete="off" />
+    </div>
+
+    <div class="filtros" id="filtros"></div>
+    <div class="resultado-info" id="resultado-info"></div>
+
+    <main id="grade" class="grade"></main>
+
+    <div id="vazio-estoque" class="vazio hidden">
+      <p>Nenhum item no estoque ainda.</p>
+      <button class="btn-primario" id="btn-add-vazio">+ Adicionar garrafa</button>
+    </div>
+  </section>
+
+  <!-- ====================== ABA: COMPRAS ====================== -->
+  <section id="aba-compras" class="aba hidden">
+    <div class="compras-acoes">
+      <button class="btn-primario" id="btn-ler-nota">📷 Ler nota fiscal</button>
+      <button class="btn-secundario" id="btn-nova-compra">+ Compra manual</button>
+    </div>
+    <div class="resultado-info" id="compras-info"></div>
+    <main id="lista-compras" class="lista-compras"></main>
+    <div id="vazio-compras" class="vazio hidden">
+      <p>Nenhuma compra registrada ainda.</p>
+    </div>
+  </section>
+
+  <!-- ====================== NAVEGAÇÃO INFERIOR ====================== -->
+  <nav class="nav-inferior">
+    <button class="nav-btn ativo" data-aba="estoque">
+      <span class="nav-ico">📦</span><span>Estoque</span>
+    </button>
+    <button class="nav-btn" data-aba="compras">
+      <span class="nav-ico">🧾</span><span>Compras</span>
+    </button>
+    <button class="nav-btn nav-fab" id="fab-add" title="Adicionar garrafa">+</button>
+  </nav>
+
+  <!-- ====================== MODAL: ITEM ====================== -->
+  <div id="modal-item" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-conteudo">
+      <div class="modal-topo">
+        <h2 id="modal-item-titulo">Nova garrafa</h2>
+        <button class="modal-fechar" data-fecha aria-label="Fechar">✕</button>
+      </div>
+      <form id="form-item" class="form">
+        <input type="hidden" name="sku_original" />
+        <label>Nome do vinho <input name="nome" required placeholder="Ex.: Malbec Reserva" /></label>
+        <div class="form-linha">
+          <label>Tipo
+            <select name="tipo">
+              <option>Tinto</option><option>Branco</option><option>Rosé</option><option>Espumante</option>
+            </select>
+          </label>
+          <label>Uva <input name="uva" placeholder="Ex.: Malbec" /></label>
+        </div>
+        <div class="form-linha">
+          <label>Produtor <input name="produtor" placeholder="Opcional" /></label>
+          <label>Código/SKU <input name="sku" placeholder="Opcional" /></label>
+        </div>
+        <div class="form-linha">
+          <label>Quantidade <input name="qtd" type="number" min="0" step="1" value="0" inputmode="numeric" /></label>
+          <label>Alerta abaixo de <input name="minimo" type="number" min="0" step="1" value="3" inputmode="numeric" /></label>
+        </div>
+        <div class="form-linha">
+          <label>Preço de aquisição (R$) <input name="precoAquisicao" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00" /></label>
+          <label>Data da compra <input name="dataCompra" type="date" /></label>
+        </div>
+        <label>Fornecedor <input name="fornecedor" list="lista-fornecedores" placeholder="Ex.: Distribuidora X" /></label>
+        <datalist id="lista-fornecedores"></datalist>
+        <label>Observações <textarea name="obs" rows="2" placeholder="Opcional"></textarea></label>
+        <div class="form-botoes">
+          <button type="button" class="btn-perigo hidden" id="btn-excluir-item">Excluir</button>
+          <button type="submit" class="btn-primario">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ====================== MODAL: COMPRA ====================== -->
+  <div id="modal-compra" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-conteudo">
+      <div class="modal-topo">
+        <h2>Registrar compra</h2>
+        <button class="modal-fechar" data-fecha aria-label="Fechar">✕</button>
+      </div>
+      <form id="form-compra" class="form">
+        <label>Vinho
+          <input name="nome" list="lista-vinhos" required placeholder="Digite ou escolha um do estoque" />
+        </label>
+        <datalist id="lista-vinhos"></datalist>
+        <div class="form-linha">
+          <label>Quantidade <input name="qtd" type="number" min="1" step="1" value="1" inputmode="numeric" required /></label>
+          <label>Preço unitário (R$) <input name="precoUnit" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00" /></label>
+        </div>
+        <label>Fornecedor <input name="fornecedor" list="lista-fornecedores" placeholder="Ex.: Distribuidora X" /></label>
+        <div class="form-linha">
+          <label>Data <input name="data" type="date" /></label>
+          <label>Nº / chave da nota <input name="notaChave" placeholder="Opcional" /></label>
+        </div>
+        <p class="dica" id="dica-compra"></p>
+        <div class="form-botoes">
+          <button type="submit" class="btn-primario">Salvar compra</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ====================== TOAST ====================== -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "name": "Vinho 24 Horas · Gestão",
+  "short_name": "Gestão 24H",
+  "description": "Controle interno das adegas: estoque, preço de aquisição, fornecedores e compras.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#2a0715",
+  "theme_color": "#3d0a1f",
+  "lang": "pt-BR",
+  "icons": [
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

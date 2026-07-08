@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
+  <rect width="192" height="192" rx="42" fill="#3d0a1f"/>
+  <!-- Taça -->
+  <path d="M66 34 h60 c0 34 -12 52 -24 58 v34 h18 a4 4 0 0 1 0 8 H72 a4 4 0 0 1 0 -8 h18 v-34 C78 86 66 68 66 34 Z"
+        fill="#7d1935" stroke="#d4a544" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M70 42 h52 c-1 14 -5 24 -10 31 H80 c-5 -7 -9 -17 -10 -31 Z" fill="#d4a544" opacity="0.85"/>
+  <!-- Rótulo GESTÃO -->
+  <text x="96" y="172" text-anchor="middle" font-family="Segoe UI, sans-serif"
+        font-size="19" font-weight="800" letter-spacing="1" fill="#f0d089">GESTÃO</text>
+</svg>
