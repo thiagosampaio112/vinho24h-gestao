@@ -72,6 +72,9 @@ body {
   border-bottom: 1px solid var(--card-borda);
 }
 .topo-marca { font-size: 18px; display: flex; align-items: center; }
+.topo-dir { display: flex; align-items: center; gap: 10px; }
+.btn-config { background: none; border: none; color: var(--texto-suave); font-size: 20px; cursor: pointer; padding: 2px 4px; line-height: 1; }
+.btn-config:hover { color: var(--dourado); }
 .topo-modo { font-size: 11px; color: var(--texto-suave); }
 .topo-modo .ponto { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
 .topo-modo.online .ponto { background: var(--verde); }

@@ -15,11 +15,16 @@
    Esta planilha é NOVA e separada da planilha do guia de vinhos (a do QR).
    -------------------------------------------------------------------------- */
 
-// >>> COLE AQUI o link do Apps Script publicado (termina em /exec). Ex.:
-// const API_URL = "https://script.google.com/macros/s/AKfy.../exec";
-const API_URL = "";
-// Token combinado com o Apps Script (qualquer senha; a MESMA nos dois lados).
-const API_TOKEN = "";
+// A conexão com a planilha (link do Apps Script + senha) NÃO fica no código —
+// por segurança, cada pessoa cola uma vez no próprio celular (ícone de
+// engrenagem no topo → "Conectar à planilha"). Fica guardada só no aparelho.
+const CFG_KEY = "vinho24h_gestao_cfg";
+let API_URL = "";
+let API_TOKEN = "";
+function carregarConfig() {
+  try { const c = JSON.parse(localStorage.getItem(CFG_KEY) || "{}"); API_URL = c.url || ""; API_TOKEN = c.token || ""; } catch (_) {}
+}
+carregarConfig();
 
 // ---- Utilidades DOM -----------------------------------------------------
 const $  = (s) => document.querySelector(s);
@@ -307,6 +312,42 @@ $("#btn-ler-nota").addEventListener("click", () => {
     "as compras automaticamente para você só conferir e salvar.\n\n" +
     "Por enquanto, use \"+ Compra manual\". Passo a passo no arquivo SETUP.md."
   );
+});
+
+// ======================================================================
+//  MODAL — CONEXÃO (link + senha da planilha, guardado só neste aparelho)
+// ======================================================================
+$("#btn-config").addEventListener("click", () => {
+  const f = $("#form-config");
+  f.url.value = API_URL; f.token.value = API_TOKEN;
+  $("#config-status").textContent = "";
+  abrir("#modal-config");
+});
+
+$("#btn-testar").addEventListener("click", async () => {
+  const f = $("#form-config");
+  const url = f.url.value.trim(), token = f.token.value.trim();
+  const st = $("#config-status");
+  if (!url) { st.textContent = "Cole o link do app primeiro."; return; }
+  st.textContent = "Testando…";
+  try {
+    const resp = await fetch(`${url}?token=${encodeURIComponent(token)}`, { cache: "no-store" });
+    const json = await resp.json();
+    if (json.erro) throw new Error(json.erro);
+    st.textContent = `✓ Conectou! ${(json.estoque || []).length} itens na planilha.`;
+  } catch (err) { st.textContent = "✗ Não conectou: " + (err.message || "confira o link/senha"); }
+});
+
+$("#form-config").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const cfg = { url: f.url.value.trim(), token: f.token.value.trim() };
+  localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
+  carregarConfig(); marcarModo();
+  fechar("#modal-config");
+  try { await carregar(); } catch (err) { console.error(err); }
+  irPara("estoque"); atualizarDatalists();
+  toast(online() ? "Conectado à planilha ✓" : "Modo demonstração");
 });
 
 // ======================================================================

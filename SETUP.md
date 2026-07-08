@@ -57,14 +57,16 @@ por foto/IA é a **Fase 2** (opcional, quando quiser).
    script acessando sua própria planilha — clique em Avançado → Acessar).
 5. Copie o **link do app da Web** (termina em **`/exec`**).
 
-### 5) Ligar no app
-1. Abra o arquivo **`app.js`** (na pasta do projeto), lá no topo:
-   ```js
-   const API_URL = "COLE_AQUI_O_LINK_/exec";
-   const API_TOKEN = "a_mesma_senha_do_TOKEN";
-   ```
-2. Salve, publique (git push) e pronto: o cabeçalho do app mostra
-   **"● Planilha"** em vez de "● Demonstração". Agora todos veem o mesmo estoque.
+### 5) Ligar no app (pela tela de conexão — sem mexer no código)
+1. Abra o app no celular e toque na **engrenagem ⚙** (canto superior direito).
+2. Cole o **link do app (/exec)** e a **senha (TOKEN)** e toque em **Testar**.
+   - Deu "✓ Conectou!" → toque em **Salvar**.
+3. Pronto: o cabeçalho mostra **"● Planilha"** em vez de "● Demonstração".
+4. **Cada pessoa** (você, esposa, sócia) faz isso **uma vez** no próprio celular.
+
+> 🔒 Por que assim? O link e a senha ficam guardados **só no aparelho**, nunca
+> dentro do site publicado. Assim ninguém consegue descobrir e mexer no seu
+> estoque só por abrir o app.
 
 > Mudou o código do Apps Script depois? Faça **Implantar → Gerenciar
 > implantações → editar (lápis) → Nova versão**. O link `/exec` continua o mesmo.

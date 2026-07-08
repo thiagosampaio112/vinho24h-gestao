@@ -19,7 +19,10 @@
       <span class="marca-vinho">VINHO</span><span class="marca-24h">24H</span>
       <span class="marca-modulo">Gestão</span>
     </div>
-    <div class="topo-modo" id="topo-modo" title="Fonte dos dados"></div>
+    <div class="topo-dir">
+      <div class="topo-modo" id="topo-modo" title="Fonte dos dados"></div>
+      <button class="btn-config" id="btn-config" aria-label="Conectar à planilha" title="Conectar à planilha">⚙</button>
+    </div>
   </header>
 
   <!-- ====================== ABA: ESTOQUE ====================== -->
@@ -131,6 +134,31 @@
         <p class="dica" id="dica-compra"></p>
         <div class="form-botoes">
           <button type="submit" class="btn-primario">Salvar compra</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ====================== MODAL: CONEXÃO ====================== -->
+  <div id="modal-config" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-conteudo">
+      <div class="modal-topo">
+        <h2>Conectar à planilha</h2>
+        <button class="modal-fechar" data-fecha aria-label="Fechar">✕</button>
+      </div>
+      <form id="form-config" class="form">
+        <p class="dica">Cole aqui o link e a senha do seu Apps Script (veja o SETUP.md).
+          Fica guardado só neste aparelho. Deixe em branco para usar o modo demonstração.</p>
+        <label>Link do app (termina em /exec)
+          <input name="url" type="url" placeholder="https://script.google.com/macros/s/…/exec" />
+        </label>
+        <label>Senha (TOKEN)
+          <input name="token" type="text" placeholder="a mesma senha do Apps Script" />
+        </label>
+        <p class="dica" id="config-status"></p>
+        <div class="form-botoes">
+          <button type="button" class="btn-secundario" id="btn-testar">Testar</button>
+          <button type="submit" class="btn-primario">Salvar</button>
         </div>
       </form>
     </div>
