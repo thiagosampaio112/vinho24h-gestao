@@ -106,7 +106,6 @@ function doPost(e) {
       case "excluirItem":      r = excluirItem(body.sku); break;
       case "ajustarQtd":       r = ajustarQtd(body.sku, body.qtd); break;
       case "registrarCompra":  r = registrarCompra(body.compra); break;
-      case "lerNota":          r = lerNota(body.arquivoBase64, body.mime); break;
       default: throw new Error("Ação desconhecida: " + body.action);
     }
     return _json(r || { ok: true });
@@ -187,45 +186,11 @@ function _slug(s) {
 
 /**
  * ==========================================================================
- *  FASE 2 — Leitura de nota fiscal por IA (Claude)
+ *  FASE 2 — Leitura de nota fiscal por IA
  * ==========================================================================
- *  Recebe a foto/PDF em base64, manda para o Claude e devolve os itens
- *  já organizados para o app mostrar (o usuário confere antes de salvar).
- *  Precisa da propriedade CLAUDE_API_KEY configurada no projeto.
+ *  A leitura da nota (foto/PDF) é feita DIRETO NO CELULAR, chamando a API do
+ *  Gemini a partir do próprio app (a chave da IA fica guardada só no aparelho,
+ *  colada na tela de engrenagem ⚙). Por isso NÃO há código de IA aqui no
+ *  servidor — este Apps Script cuida apenas de ler/escrever na planilha.
+ *  Os itens conferidos pelo usuário chegam aqui como "registrarCompra".
  */
-function lerNota(arquivoBase64, mime) {
-  var apiKey = _prop("CLAUDE_API_KEY");
-  if (!apiKey) throw new Error("Configure CLAUDE_API_KEY nas Propriedades do script (ver SETUP.md).");
-
-  var ehPdf = (mime || "").indexOf("pdf") >= 0;
-  var bloco = ehPdf
-    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: arquivoBase64 } }
-    : { type: "image", source: { type: "base64", media_type: mime || "image/jpeg", data: arquivoBase64 } };
-
-  var instrucao =
-    "Você recebe uma nota fiscal/cupom de compra de vinhos. Extraia os itens. " +
-    "Responda SOMENTE com JSON válido, sem texto extra, no formato: " +
-    '{"fornecedor":"","data":"AAAA-MM-DD","itens":[{"nome":"","qtd":0,"precoUnit":0}]}. ' +
-    "Use ponto como separador decimal. Se não achar algum campo, deixe vazio ou 0.";
-
-  var payload = {
-    model: "claude-sonnet-5",
-    max_tokens: 2000,
-    messages: [{ role: "user", content: [bloco, { type: "text", text: instrucao }] }]
-  };
-
-  var resp = UrlFetchApp.fetch("https://api.anthropic.com/v1/messages", {
-    method: "post",
-    contentType: "application/json",
-    headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  });
-
-  var dados = JSON.parse(resp.getContentText());
-  if (dados.error) throw new Error("IA: " + dados.error.message);
-  var texto = (dados.content && dados.content[0] && dados.content[0].text) || "{}";
-  texto = texto.replace(/```json|```/g, "").trim();
-  var extraido = JSON.parse(texto);
-  return { ok: true, nota: extraido };
-}

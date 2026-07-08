@@ -139,6 +139,39 @@
     </div>
   </div>
 
+  <!-- Entrada de arquivo (foto da câmera ou PDF) — escondida -->
+  <input id="input-nota" type="file" accept="image/*,application/pdf" class="hidden" />
+
+  <!-- ====================== MODAL: CONFERIR NOTA (IA) ====================== -->
+  <div id="modal-nota" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-conteudo">
+      <div class="modal-topo">
+        <h2>Conferir itens da nota</h2>
+        <button class="modal-fechar" data-fecha aria-label="Fechar">✕</button>
+      </div>
+      <form id="form-nota" class="form">
+        <div class="form-linha">
+          <label>Fornecedor <input name="fornecedor" list="lista-fornecedores" placeholder="Fornecedor" /></label>
+          <label>Data <input name="data" type="date" /></label>
+        </div>
+        <p class="dica">Confira o que a IA leu, ajuste o que precisar e salve. Cada linha vira uma compra.</p>
+        <div id="nota-itens" class="nota-itens"></div>
+        <button type="button" class="btn-secundario" id="btn-add-item-nota">+ Adicionar item</button>
+        <div class="form-botoes">
+          <button type="submit" class="btn-primario" id="btn-salvar-nota">Salvar compras</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Overlay de "processando" (leitura da IA) -->
+  <div id="carregando" class="modal-overlay hidden">
+    <div class="carregando-caixa">
+      <div class="spinner"></div>
+      <p id="carregando-msg">Lendo a nota com a IA…</p>
+    </div>
+  </div>
+
   <!-- ====================== MODAL: CONEXÃO ====================== -->
   <div id="modal-config" class="modal-overlay hidden" role="dialog" aria-modal="true">
     <div class="modal-conteudo">
@@ -155,6 +188,11 @@
         <label>Senha (TOKEN)
           <input name="token" type="text" placeholder="a mesma senha do Apps Script" />
         </label>
+        <hr class="divisor" />
+        <label>Chave da IA (Gemini) — para ler notas fiscais
+          <input name="geminiKey" type="text" placeholder="AIza… (cole a chave do Google AI Studio)" autocomplete="off" />
+        </label>
+        <p class="dica">Pegue em <b>aistudio.google.com/apikey</b>. Fica guardada só neste aparelho.</p>
         <p class="dica" id="config-status"></p>
         <div class="form-botoes">
           <button type="button" class="btn-secundario" id="btn-testar">Testar</button>

@@ -73,21 +73,28 @@ por foto/IA é a **Fase 2** (opcional, quando quiser).
 
 ---
 
-## Fase 2 — Leitura de nota fiscal por foto/PDF (IA)
+## Fase 2 — Leitura de nota fiscal por foto/PDF (IA) — JÁ FUNCIONA
 
-Isso usa a IA do Claude para ler a nota e preencher as compras. Custa **centavos
-por nota** (você paga direto à Anthropic pelo uso).
+Usa a IA do **Google Gemini** para ler a nota e preencher as compras. Tem um
+**limite gratuito** generoso; se um dia passar, é pré-pago por uso (centavos por
+nota) e só cobra se você cadastrar cartão. **Não precisa mexer no Apps Script**
+para isso — a leitura roda direto no celular.
 
-1. Crie uma chave em **console.anthropic.com** → *API Keys* → *Create Key*.
-   Coloque alguns dólares de crédito (o uso por nota é muito baixo).
-2. No Apps Script → engrenagem → **Propriedades do script**, adicione:
-   - Propriedade: `CLAUDE_API_KEY` → Valor: a chave (começa com `sk-ant-...`)
-3. Faça **Implantar → Gerenciar implantações → Nova versão** (pra valer a chave).
-4. Me avise: eu ligo o botão **"📷 Ler nota fiscal"** do app na câmera/PDF
-   (o código do lado do servidor já está pronto no `apps-script.gs`).
+1. Pegue uma chave em **aistudio.google.com/apikey** → *Criar chave de API*
+   (começa com `AIza…`). Guarde.
+   - *(Opcional)* Para tirar o risco de estourar o limite, cadastre um cartão em
+     **console.cloud.google.com → Faturamento**; sem cartão, funciona no grátis.
+2. No app, toque na **engrenagem ⚙** → cole a chave no campo **"Chave da IA
+   (Gemini)"** → **Salvar**. (Fica guardada só neste aparelho.)
+3. Vá na aba **Compras → "📷 Ler nota fiscal"** → tire a foto ou escolha o PDF.
+4. A IA lê os itens; você **confere/ajusta** na tela e toca **Salvar compras**.
+   Cada item entra no histórico e soma no estoque.
 
-> A chave da IA fica **guardada no Apps Script**, nunca no site público — então
-> ninguém consegue roubá-la abrindo o app. É o jeito seguro de fazer.
+> 🔒 A chave da IA fica **só no seu celular** (não no site publicado). Cada
+> pessoa que for ler notas cola a própria chave uma vez.
+
+> 💡 Dica: foto reta, boa luz e a nota inteira no quadro = leitura melhor. Para
+> nota fiscal eletrônica (NF-e), o PDF costuma dar resultado mais preciso que a foto.
 
 ---
 

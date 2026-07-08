@@ -35,5 +35,6 @@ A Fase 2 (leitura de nota por IA) é opcional e vem depois.
 | `manifest.webmanifest`, `sw.js`, `icons/` | o que torna o app instalável/offline |
 
 ## Roadmap
-- **Fase 2** — leitura de nota fiscal (QR Code da NF-e + foto/PDF com IA Claude).
+- **Fase 2** ✅ — leitura de nota fiscal por foto/PDF com IA (Google Gemini),
+  com tela de conferência antes de salvar. Falta (futuro): ler QR Code da NF-e.
 - **Fase 3** — pesquisa de preços em vários sites (comparar se comprou bem).

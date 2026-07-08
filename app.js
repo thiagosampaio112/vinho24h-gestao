@@ -21,8 +21,11 @@
 const CFG_KEY = "vinho24h_gestao_cfg";
 let API_URL = "";
 let API_TOKEN = "";
+let GEMINI_KEY = "";
+// Modelo da IA usada para ler as notas. Pode trocar se quiser outro.
+const MODELO_IA = "gemini-2.5-flash";
 function carregarConfig() {
-  try { const c = JSON.parse(localStorage.getItem(CFG_KEY) || "{}"); API_URL = c.url || ""; API_TOKEN = c.token || ""; } catch (_) {}
+  try { const c = JSON.parse(localStorage.getItem(CFG_KEY) || "{}"); API_URL = c.url || ""; API_TOKEN = c.token || ""; GEMINI_KEY = c.geminiKey || ""; } catch (_) {}
 }
 carregarConfig();
 
@@ -302,16 +305,133 @@ function atualizarDatalists() {
 }
 
 // ======================================================================
-//  LER NOTA FISCAL (Fase 2 — precisa da chave da IA no Apps Script)
+//  LER NOTA FISCAL COM IA (Gemini) — foto da câmera ou PDF
 // ======================================================================
 $("#btn-ler-nota").addEventListener("click", () => {
-  alert(
-    "📷 Leitura de nota fiscal — Fase 2\n\n" +
-    "Assim que você configurar o Apps Script com a chave da IA (Claude), " +
-    "este botão vai abrir a câmera / PDF, ler os itens da nota e preencher " +
-    "as compras automaticamente para você só conferir e salvar.\n\n" +
-    "Por enquanto, use \"+ Compra manual\". Passo a passo no arquivo SETUP.md."
-  );
+  if (!GEMINI_KEY) {
+    toast("Configure a chave da IA na engrenagem ⚙ primeiro");
+    $("#btn-config").click();
+    return;
+  }
+  $("#input-nota").click(); // abre a câmera / seletor de arquivo
+});
+
+$("#input-nota").addEventListener("change", async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = ""; // permite reenviar o mesmo arquivo depois
+  if (!file) return;
+  try {
+    const { base64, mime } = await prepararArquivo(file);
+    $("#carregando-msg").textContent = "Lendo a nota com a IA…";
+    abrir("#carregando");
+    const nota = await lerNotaIA(base64, mime);
+    fechar("#carregando");
+    abrirModalNota(nota);
+  } catch (err) {
+    fechar("#carregando");
+    console.error(err);
+    toast("Não consegui ler: " + (err.message || "tente outra foto"));
+  }
+});
+
+// Lê o arquivo em base64. Fotos são reduzidas (mais rápido e barato); PDF vai inteiro.
+function prepararArquivo(file) {
+  return new Promise((resolve, reject) => {
+    const ehImagem = file.type.startsWith("image/");
+    if (!ehImagem) {
+      const r = new FileReader();
+      r.onload = () => resolve({ base64: String(r.result).split(",")[1], mime: file.type || "application/pdf" });
+      r.onerror = reject;
+      r.readAsDataURL(file);
+      return;
+    }
+    // Imagem: redimensiona para no máx. 1600px no maior lado.
+    const r = new FileReader();
+    r.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const max = 1600;
+        let { width: w, height: h } = img;
+        if (w > max || h > max) { const escala = max / Math.max(w, h); w = Math.round(w * escala); h = Math.round(h * escala); }
+        const cv = document.createElement("canvas");
+        cv.width = w; cv.height = h;
+        cv.getContext("2d").drawImage(img, 0, 0, w, h);
+        resolve({ base64: cv.toDataURL("image/jpeg", 0.85).split(",")[1], mime: "image/jpeg" });
+      };
+      img.onerror = reject;
+      img.src = r.result;
+    };
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+// Chama o Gemini direto do celular (a chave fica só no aparelho).
+async function lerNotaIA(base64, mime) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODELO_IA}:generateContent?key=${encodeURIComponent(GEMINI_KEY)}`;
+  const instrucao =
+    "Esta é uma nota fiscal ou cupom de compra de vinhos/bebidas. Extraia os itens comprados. " +
+    "Responda em JSON no formato: {\"fornecedor\":\"\",\"data\":\"AAAA-MM-DD\",\"itens\":[{\"nome\":\"\",\"qtd\":0,\"precoUnit\":0}]}. " +
+    "nome = descrição do produto (limpa, sem códigos). qtd = quantidade (número). precoUnit = valor unitário em reais (número, ponto decimal). " +
+    "Se o fornecedor/emitente aparecer, preencha; senão deixe vazio. Se a data aparecer, use AAAA-MM-DD. Ignore itens que não sejam produtos (frete, impostos, totais).";
+  const body = {
+    contents: [{ parts: [{ inline_data: { mime_type: mime, data: base64 } }, { text: instrucao }] }],
+    generationConfig: { temperature: 0, responseMimeType: "application/json" },
+  };
+  const resp = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const json = await resp.json();
+  if (json.error) throw new Error(json.error.message || "erro da IA");
+  const texto = json.candidates && json.candidates[0] && json.candidates[0].content
+    && json.candidates[0].content.parts && json.candidates[0].content.parts[0].text;
+  if (!texto) throw new Error("a IA não retornou itens");
+  let dados; try { dados = JSON.parse(texto); } catch (_) { throw new Error("resposta da IA fora do formato"); }
+  return dados;
+}
+
+// ---- Modal de conferência dos itens lidos ----
+function abrirModalNota(nota) {
+  const f = $("#form-nota");
+  f.reset();
+  f.fornecedor.value = nota.fornecedor || "";
+  f.data.value = (nota.data && /^\d{4}-\d{2}-\d{2}$/.test(nota.data)) ? nota.data : hojeISO();
+  const itens = Array.isArray(nota.itens) ? nota.itens : [];
+  $("#nota-itens").innerHTML = `<div class="nota-cab"><span>Produto</span><span>Qtd</span><span>Unit. R$</span><span></span></div>`;
+  if (itens.length === 0) linhaItemNota({});
+  else itens.forEach((it) => linhaItemNota(it));
+  atualizarDatalists();
+  abrir("#modal-nota");
+}
+
+function linhaItemNota(it) {
+  const div = el("div", "nota-item");
+  div.innerHTML = `
+    <input class="i-nome" type="text" value="${(it.nome || "").replace(/"/g, "&quot;")}" placeholder="Nome do vinho" />
+    <input class="i-qtd" type="number" min="0" step="1" inputmode="numeric" value="${Number(it.qtd) || ""}" placeholder="0" />
+    <input class="i-preco" type="number" min="0" step="0.01" inputmode="decimal" value="${Number(it.precoUnit) || ""}" placeholder="0,00" />
+    <button type="button" class="nota-x" aria-label="Remover">✕</button>`;
+  div.querySelector(".nota-x").addEventListener("click", () => div.remove());
+  $("#nota-itens").appendChild(div);
+}
+
+$("#btn-add-item-nota").addEventListener("click", () => linhaItemNota({}));
+
+$("#form-nota").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const fornecedor = f.fornecedor.value.trim();
+  const data = f.data.value || hojeISO();
+  const linhas = $$("#nota-itens .nota-item");
+  const compras = [];
+  linhas.forEach((l) => {
+    const nome = l.querySelector(".i-nome").value.trim();
+    const qtd = Number(l.querySelector(".i-qtd").value) || 0;
+    const precoUnit = Number(l.querySelector(".i-preco").value) || 0;
+    if (nome && qtd > 0) compras.push({ nome, qtd, precoUnit, fornecedor, data, notaChave: "" });
+  });
+  if (compras.length === 0) { toast("Preencha ao menos um item (nome e quantidade)"); return; }
+  await comProgresso(async () => { for (const c of compras) await registrarCompra(c); });
+  fechar("#modal-nota"); await recarregar(); irPara("compras");
+  toast(`${compras.length} ${compras.length === 1 ? "compra salva" : "compras salvas"} ✓`);
 });
 
 // ======================================================================
@@ -319,7 +439,7 @@ $("#btn-ler-nota").addEventListener("click", () => {
 // ======================================================================
 $("#btn-config").addEventListener("click", () => {
   const f = $("#form-config");
-  f.url.value = API_URL; f.token.value = API_TOKEN;
+  f.url.value = API_URL; f.token.value = API_TOKEN; f.geminiKey.value = GEMINI_KEY;
   $("#config-status").textContent = "";
   abrir("#modal-config");
 });
@@ -341,7 +461,7 @@ $("#btn-testar").addEventListener("click", async () => {
 $("#form-config").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
-  const cfg = { url: f.url.value.trim(), token: f.token.value.trim() };
+  const cfg = { url: f.url.value.trim(), token: f.token.value.trim(), geminiKey: f.geminiKey.value.trim() };
   localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
   carregarConfig(); marcarModo();
   fechar("#modal-config");
