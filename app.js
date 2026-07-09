@@ -41,9 +41,9 @@ const hojeISO = () => new Date().toISOString().slice(0, 10);
 const dataBR = (iso) => { if (!iso) return "—"; const [a, m, d] = String(iso).slice(0, 10).split("-"); return d && m && a ? `${d}/${m}/${a}` : iso; };
 
 // ---- Estado -------------------------------------------------------------
-let DADOS = { estoque: [], compras: [], fornecedores: [] };
+let DADOS = { estoque: [], compras: [], fornecedores: [], vigiados: [], precos: [] };
 const filtro = { busca: "", tipo: null, baixo: false };
-const LS_KEY = "vinho24h_gestao_dados";
+const LS_KEY = "vinho24h_gestao_dados_v2";
 
 // ======================================================================
 //  CAMADA DE DADOS  (Apps Script quando online; localStorage no demo)
@@ -75,10 +75,11 @@ function gravarLocal() { try { localStorage.setItem(LS_KEY, JSON.stringify(DADOS
 async function carregar() {
   if (online()) {
     DADOS = await apiGet();
-    DADOS.estoque = DADOS.estoque || []; DADOS.compras = DADOS.compras || []; DADOS.fornecedores = DADOS.fornecedores || [];
   } else {
     DADOS = lerLocal() || SEED();
   }
+  DADOS.estoque = DADOS.estoque || []; DADOS.compras = DADOS.compras || []; DADOS.fornecedores = DADOS.fornecedores || [];
+  DADOS.vigiados = DADOS.vigiados || []; DADOS.precos = DADOS.precos || []; DADOS.lojas = DADOS.lojas || [];
 }
 
 // Gera um SKU simples quando o item não tem um.
@@ -135,6 +136,31 @@ function registrarFornecedor(nome) {
   if (!DADOS.fornecedores.some((f) => (f.nome || f) === nome)) DADOS.fornecedores.push({ nome });
 }
 
+async function excluirCompra(compra) {
+  if (online()) { await apiPost("excluirCompra", { linha: compra.__row }); }
+  else { const i = DADOS.compras.indexOf(compra); if (i >= 0) DADOS.compras.splice(i, 1); gravarLocal(); }
+}
+
+// --- Lojas de confiança (radar de preço, Fase 3B) ---
+function siteDe(url) { const m = String(url || "").match(/^https?:\/\/([^/]+)/i); return m ? m[1].replace(/^www\./i, "") : String(url || ""); }
+
+async function salvarLoja(loja, urlOriginal) {
+  if (!loja.nome) loja.nome = siteDe(loja.url);
+  if (!loja.ativo) loja.ativo = "sim";
+  if (online()) { await apiPost("salvarLoja", { loja, urlOriginal }); }
+  else {
+    const alvo = urlOriginal || loja.url;
+    const idx = DADOS.lojas.findIndex((l) => l.url === alvo);
+    if (idx >= 0) DADOS.lojas[idx] = { ...DADOS.lojas[idx], ...loja }; else DADOS.lojas.push(loja);
+    gravarLocal();
+  }
+}
+async function excluirLoja(url) {
+  if (online()) { await apiPost("excluirLoja", { url }); }
+  else { DADOS.lojas = DADOS.lojas.filter((l) => l.url !== url); gravarLocal(); }
+}
+
+
 // ======================================================================
 //  RENDER — ESTOQUE
 // ======================================================================
@@ -173,15 +199,19 @@ function renderEstoque() {
   const grade = $("#grade");
   const vazio = $("#vazio-estoque");
   grade.innerHTML = "";
+  grade.classList.toggle("modo-selecao", modoSelecao);
   $("#resultado-info").textContent = `${lista.length} ${lista.length === 1 ? "item" : "itens"}`;
+  $("#btn-selecionar").classList.toggle("hidden", modoSelecao || DADOS.estoque.length === 0);
 
   if (DADOS.estoque.length === 0) { vazio.classList.remove("hidden"); return; }
   vazio.classList.add("hidden");
 
   lista.forEach((v) => {
-    const item = el("div", "item" + (estaBaixo(v) ? " baixo" : ""));
+    const sel = modoSelecao && selecionados.has(v.sku);
+    const item = el("div", "item" + (estaBaixo(v) ? " baixo" : "") + (sel ? " selecionado" : ""));
     const qtd = Number(v.qtd) || 0;
     item.innerHTML = `
+      <div class="item-check"></div>
       <div class="item-info">
         <div><span class="tag-tipo ${classeTipo(v.tipo)}">${v.tipo || "—"}</span>
           ${estaBaixo(v) ? '<span class="selo-baixo">⚠ Repor</span>' : ""}</div>
@@ -200,12 +230,52 @@ function renderEstoque() {
           <button class="qtd-btn mais" aria-label="Aumentar">+</button>
         </div>
       </div>`;
-    item.querySelector(".item-info").addEventListener("click", () => abrirModalItem(v));
-    item.querySelector(".menos").addEventListener("click", async () => { await ajustarQtd(v.sku, -1); renderEstoque(); });
-    item.querySelector(".mais").addEventListener("click", async () => { await ajustarQtd(v.sku, +1); renderEstoque(); });
+    if (modoSelecao) {
+      item.querySelector(".item-info").addEventListener("click", () => alternarSelecao(v.sku));
+    } else {
+      item.querySelector(".item-info").addEventListener("click", () => abrirModalItem(v));
+      item.querySelector(".menos").addEventListener("click", async () => { await ajustarQtd(v.sku, -1); renderEstoque(); });
+      item.querySelector(".mais").addEventListener("click", async () => { await ajustarQtd(v.sku, +1); renderEstoque(); });
+    }
     grade.appendChild(item);
   });
 }
+
+// ---- Seleção múltipla + exclusão em massa (aba Estoque) ----
+let modoSelecao = false;
+const selecionados = new Set();
+
+function alternarSelecao(sku) {
+  if (selecionados.has(sku)) selecionados.delete(sku); else selecionados.add(sku);
+  renderEstoque(); atualizarBarraSelecao();
+}
+function atualizarBarraSelecao() {
+  const n = selecionados.size;
+  $("#selecao-info").textContent = n ? `${n} selecionada${n === 1 ? "" : "s"}` : "Toque nas garrafas para selecionar";
+  $("#btn-selecao-excluir").disabled = n === 0;
+}
+function entrarSelecao() {
+  modoSelecao = true; selecionados.clear();
+  $("#selecao-barra").classList.remove("hidden");
+  renderEstoque(); atualizarBarraSelecao();
+}
+function sairSelecao() {
+  modoSelecao = false; selecionados.clear();
+  $("#selecao-barra").classList.add("hidden");
+  renderEstoque();
+}
+$("#btn-selecionar").addEventListener("click", entrarSelecao);
+$("#btn-selecao-cancelar").addEventListener("click", sairSelecao);
+$("#btn-selecao-excluir").addEventListener("click", async () => {
+  const skus = [...selecionados];
+  if (!skus.length) return;
+  if (!confirm(`Excluir ${skus.length} ${skus.length === 1 ? "garrafa" : "garrafas"} do estoque?`)) return;
+  await comProgresso(async () => { for (const sku of skus) await excluirItem(sku); });
+  modoSelecao = false; selecionados.clear();
+  $("#selecao-barra").classList.add("hidden");
+  await recarregar();
+  toast(`${skus.length} ${skus.length === 1 ? "garrafa excluída" : "garrafas excluídas"}`);
+});
 
 // ======================================================================
 //  RENDER — COMPRAS
@@ -225,8 +295,202 @@ function renderCompras() {
       <div class="compra-topo">
         <span class="compra-nome">${c.nome}</span>
         <span class="compra-total">${brl(totalC)}</span>
+        <button class="compra-x" aria-label="Excluir compra" title="Excluir compra">✕</button>
       </div>
       <div class="compra-sub">${c.qtd} un. × ${brl(c.precoUnit)} · ${c.fornecedor || "sem fornecedor"} · ${dataBR(c.data)}</div>`;
+    card.querySelector(".compra-x").addEventListener("click", async () => {
+      if (!confirm("Excluir esta compra do histórico?\n(não altera o estoque — ajuste com +/− se precisar)")) return;
+      await comProgresso(() => excluirCompra(c));
+      await recarregar(); toast("Compra excluída");
+    });
+    cont.appendChild(card);
+  });
+}
+
+// ======================================================================
+//  RENDER — PREÇOS (radar por vinho: o que você paga em cada fornecedor)
+// ======================================================================
+const filtroOfertas = { soSubiu: false };
+
+// Histórico de preço pago (das Compras) de um vinho, do mais antigo ao mais novo.
+function historicoFornecedor(nome) {
+  const chave = String(nome || "").toLowerCase().trim();
+  return DADOS.compras
+    .filter((c) => String(c.nome || "").toLowerCase().trim() === chave)
+    .map((c) => ({ data: c.data || "", preco: Number(c.precoUnit) || 0, fornecedor: (c.fornecedor || "").trim() }))
+    .filter((c) => c.preco > 0)
+    .sort((a, b) => String(a.data).localeCompare(String(b.data)));
+}
+
+// Lista de preços públicos (da busca mais recente) de um vinho — uma oferta por
+// loja, ranqueada da mais barata para a mais cara.
+function publicoDe(nome) {
+  const chave = String(nome || "").toLowerCase().trim();
+  const achados = (DADOS.precos || []).filter((p) => String(p.consulta || "").toLowerCase().trim() === chave && Number(p.preco) > 0);
+  if (!achados.length) return [];
+  const ultimaData = achados.map((p) => String(p.data || "")).sort().slice(-1)[0];
+  const doDia = achados.filter((p) => String(p.data || "") === ultimaData);
+  const porSite = {};
+  doDia.forEach((p) => { const s = p.site || ""; if (!porSite[s] || Number(p.preco) < Number(porSite[s].preco)) porSite[s] = p; });
+  return Object.keys(porSite).map((s) => porSite[s]).sort((a, b) => Number(a.preco) - Number(b.preco));
+}
+
+// Consolida o que sabemos sobre o preço de um item do estoque.
+function precoDoItem(item) {
+  const h = historicoFornecedor(item.nome);
+  const vals = h.map((c) => c.preco);
+  const atual = vals.length ? vals[vals.length - 1] : (Number(item.precoAquisicao) || 0);
+  const anterior = vals.length > 1 ? vals[vals.length - 2] : 0;
+  const min = vals.length ? Math.min(...vals) : atual;
+  const fornecedor = (h.length ? h[h.length - 1].fornecedor : "") || item.fornecedor || "";
+  const subiu = anterior > 0 && atual > anterior;
+  const caiu = anterior > 0 && atual < anterior;
+  const deltaPct = anterior > 0 ? Math.round(((atual - anterior) / anterior) * 100) : 0;
+  const deltaRs = anterior > 0 ? atual - anterior : 0;
+  return { h, vals, atual, anterior, min, fornecedor, subiu, caiu, deltaPct, deltaRs, compras: h.length };
+}
+
+function sparkline(vals) {
+  if (vals.length < 2) return "";
+  const ult = vals.slice(-14);
+  const min = Math.min(...ult), max = Math.max(...ult), rng = max - min || 1;
+  const barras = ult.map((v) => {
+    const alt = 6 + Math.round(((v - min) / rng) * 22); // 6..28px
+    return `<span class="spark-bar" style="height:${alt}px" title="${brl(v)}"></span>`;
+  }).join("");
+  return `<div class="spark">${barras}</div>`;
+}
+
+function montarFiltrosOfertas() {
+  const cont = $("#ofertas-filtros");
+  cont.innerHTML = "";
+  const chip = el("button", "chip chip-baixo", "⚠ Subiu de preço");
+  chip.addEventListener("click", () => {
+    filtroOfertas.soSubiu = !filtroOfertas.soSubiu;
+    chip.classList.toggle("ativo", filtroOfertas.soSubiu);
+    renderOfertas();
+  });
+  cont.appendChild(chip);
+}
+
+// Dispara a varredura de preço público no backend (Buscapé) e recarrega.
+$("#btn-buscar-publico").addEventListener("click", async () => {
+  if (!online()) { toast("A busca de preços roda no servidor — conecte à planilha primeiro"); return; }
+  if (!DADOS.estoque.length) { toast("Cadastre vinhos no estoque primeiro"); return; }
+  $("#carregando-msg").textContent = "Procurando preços públicos (pode levar 1–2 min)…";
+  abrir("#carregando");
+  try {
+    const r = await apiPost("varrerAgora", {});
+    await carregar();
+    fechar("#carregando"); renderOfertas();
+    const n = (r && r.oportunidades) ? r.oportunidades.length : 0;
+    const achados = (r && r.achados) || 0;
+    toast(n ? `${n} vinho(s) mais baratos no varejo 💰` : `Preços atualizados · ${achados} rótulos encontrados`);
+  } catch (err) {
+    fechar("#carregando"); console.error(err);
+    toast("Não consegui buscar: " + (err.message || "tente de novo"));
+  }
+});
+
+// --- Modal Lojas de confiança ---
+$("#btn-lojas").addEventListener("click", () => { renderLojas(); $("#loja-status").textContent = ""; $("#form-loja").reset(); abrir("#modal-lojas"); });
+
+function renderLojas() {
+  const cont = $("#lista-lojas");
+  const lojas = DADOS.lojas || [];
+  if (!lojas.length) { cont.innerHTML = `<p class="dica">Nenhuma loja ainda. Adicione abaixo.</p>`; return; }
+  cont.innerHTML = "";
+  lojas.forEach((l) => {
+    const div = el("div", "loja-item");
+    div.innerHTML = `<div><div class="loja-nome">${escaparHtml(l.nome || siteDe(l.url))}</div>
+      <div class="loja-url">${escaparHtml(siteDe(l.url))}</div></div>
+      <button type="button" class="loja-x" aria-label="Remover">✕</button>`;
+    div.querySelector(".loja-x").addEventListener("click", async () => {
+      if (!confirm("Remover esta loja do radar?")) return;
+      await comProgresso(() => excluirLoja(l.url));
+      renderLojas(); toast("Loja removida");
+    });
+    cont.appendChild(div);
+  });
+}
+
+$("#form-loja").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const url = f.url.value.trim();
+  if (!/^https?:\/\//i.test(url)) { $("#loja-status").textContent = "Cole o endereço completo (com https://)."; return; }
+  const loja = { url, nome: f.nome.value.trim() || siteDe(url), ativo: "sim" };
+  await comProgresso(() => salvarLoja(loja, null));
+  f.reset(); renderLojas(); toast("Loja adicionada ✓");
+});
+
+function renderOfertas() {
+  const cont = $("#lista-ofertas");
+  cont.innerHTML = "";
+  const dados = DADOS.estoque.map((it) => ({ item: it, p: precoDoItem(it) }));
+  const subiram = dados.filter((d) => d.p.subiu).length;
+  let lista = dados;
+  if (filtroOfertas.soSubiu) lista = lista.filter((d) => d.p.subiu);
+  // Ordena: quem subiu primeiro (alerta no topo), depois por nome.
+  lista.sort((a, b) => (b.p.subiu - a.p.subiu) || String(a.item.nome).localeCompare(String(b.item.nome)));
+
+  $("#ofertas-info").textContent = dados.length
+    ? `${dados.length} ${dados.length === 1 ? "vinho" : "vinhos"}${subiram ? ` · ${subiram} subiu de preço` : ""}`
+    : "";
+  $("#vazio-ofertas").classList.toggle("hidden", dados.length > 0);
+  if (!dados.length) return;
+
+  lista.forEach(({ item, p }) => {
+    const card = el("div", "oferta" + (p.subiu ? " subiu" : p.caiu ? " baixou" : ""));
+    let varHtml = "";
+    if (p.anterior) {
+      const cls = p.caiu ? "desce" : p.subiu ? "sobe" : "igual";
+      const seta = p.caiu ? "▼" : p.subiu ? "▲" : "•";
+      const sinal = p.deltaRs > 0 ? "+" : "";
+      varHtml = `<div class="oferta-var ${cls}">${seta} ${sinal}${brl(p.deltaRs)} <small>vs. compra anterior</small></div>`;
+    }
+    const selo = p.subiu ? '<span class="oferta-subiu-selo">▲ Subiu — reveja</span>'
+      : p.caiu ? '<span class="oferta-baixou-selo">▼ Baixou</span>' : "";
+    const rodape = p.compras > 1
+      ? `<span class="oferta-min">Menor pago: <b>${brl(p.min)}</b>${p.atual <= p.min ? " · é o menor 👍" : ""}</span>`
+      : p.compras === 1
+        ? `<span class="oferta-min">1ª compra registrada</span>`
+        : `<span class="oferta-min">Sem compra registrada (preço do cadastro)</span>`;
+    const contagem = p.compras ? `<span class="oferta-compras">${p.compras} ${p.compras === 1 ? "compra" : "compras"}</span>` : "";
+    // Ranking de preços públicos (várias lojas), quando houver.
+    const ofertas = publicoDe(item.nome);
+    let pubHtml = "";
+    if (ofertas.length) {
+      const menor = ofertas[0];
+      const barato = p.atual && Number(menor.preco) < p.atual;
+      const linhas = ofertas.slice(0, 5).map((o, i) => {
+        const abaixo = p.atual && Number(o.preco) < p.atual;
+        return `<a class="op-loja${abaixo ? " bom" : ""}" href="${escaparAttr(o.url)}" target="_blank" rel="noopener" title="${escaparAttr(o.achado || "")}">
+          <span class="opl-site">${i === 0 ? "🏆 " : ""}${escaparHtml(o.site || "?")}</span>
+          <span class="opl-preco">${brl(o.preco)}</span></a>`;
+      }).join("");
+      pubHtml = `<div class="oferta-publico${barato ? " bom" : ""}">
+        <div class="op-titulo">🌐 Preços públicos${ofertas.length > 1 ? ` · ${ofertas.length} lojas` : ""}</div>
+        ${linhas}
+        ${barato ? `<div class="op-flag">💰 menor está ${brl(p.atual - Number(menor.preco))} abaixo do que você paga</div>` : ""}
+      </div>`;
+    }
+    card.innerHTML = `
+      <div class="oferta-topo">
+        <div>
+          <div class="oferta-nome">${escaparHtml(item.nome || "(sem nome)")}</div>
+          <div class="oferta-site">Você paga: <b>${p.atual ? brl(p.atual) : "—"}</b>${p.fornecedor ? " · " + escaparHtml(p.fornecedor) : ""}</div>
+          ${selo}
+        </div>
+        <div class="oferta-preco">${p.atual ? `<div class="atual">${brl(p.atual)}</div>` : `<div class="semdados">sem preço</div>`}${varHtml}</div>
+      </div>
+      ${sparkline(p.vals)}
+      ${pubHtml}
+      <div class="oferta-rodape">
+        ${rodape}
+        ${contagem}
+      </div>`;
+    card.querySelector(".oferta-nome").addEventListener("click", () => abrirModalItem(item));
     cont.appendChild(card);
   });
 }
@@ -474,10 +738,13 @@ $("#form-config").addEventListener("submit", async (e) => {
 //  NAVEGAÇÃO / HELPERS DE UI
 // ======================================================================
 function irPara(aba) {
+  if (aba !== "estoque" && modoSelecao) { modoSelecao = false; selecionados.clear(); $("#selecao-barra").classList.add("hidden"); }
   $$(".aba").forEach((s) => s.classList.add("hidden"));
   $(`#aba-${aba}`).classList.remove("hidden");
   $$(".nav-btn[data-aba]").forEach((b) => b.classList.toggle("ativo", b.dataset.aba === aba));
-  if (aba === "estoque") renderEstoque(); else renderCompras();
+  if (aba === "estoque") renderEstoque();
+  else if (aba === "compras") renderCompras();
+  else if (aba === "ofertas") renderOfertas();
   window.scrollTo(0, 0);
 }
 $$(".nav-btn[data-aba]").forEach((b) => b.addEventListener("click", () => irPara(b.dataset.aba)));
@@ -534,24 +801,26 @@ async function comProgresso(fn) {
   try { await fn(); }
   catch (err) { console.error(err); toast("Erro: " + (err.message || "tente de novo")); throw err; }
 }
-async function recarregar() { if (online()) await carregar(); const ativa = $("#aba-compras").classList.contains("hidden") ? "estoque" : "compras"; if (ativa === "estoque") renderEstoque(); else renderCompras(); atualizarDatalists(); }
+async function recarregar() {
+  if (online()) await carregar();
+  const btn = $(".nav-btn[data-aba].ativo");
+  const aba = btn ? btn.dataset.aba : "estoque";
+  if (aba === "compras") renderCompras();
+  else if (aba === "ofertas") renderOfertas();
+  else renderEstoque();
+  atualizarDatalists();
+}
+
+// Escape para conteúdo vindo de fora (links/nomes) usado com innerHTML.
+function escaparHtml(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function escaparAttr(s) { return escaparHtml(s).replace(/"/g, "&quot;"); }
 
 // ======================================================================
 //  DADOS DE EXEMPLO (só no modo demonstração, na 1ª vez)
 // ======================================================================
 function SEED() {
-  const d = {
-    fornecedores: [{ nome: "Distribuidora Central" }, { nome: "Importadora Sul" }],
-    compras: [
-      { nome: "Malbec Reserva", qtd: 12, precoUnit: 28.5, fornecedor: "Importadora Sul", data: hojeISO(), notaChave: "" },
-    ],
-    estoque: [
-      { sku: "malbec-reserva", nome: "Malbec Reserva", tipo: "Tinto", uva: "Malbec", produtor: "Bodega Andina", qtd: 12, minimo: 4, precoAquisicao: 28.5, fornecedor: "Importadora Sul", dataCompra: hojeISO(), obs: "" },
-      { sku: "chardonnay-classico", nome: "Chardonnay Clássico", tipo: "Branco", uva: "Chardonnay", produtor: "Vinícola Vale", qtd: 2, minimo: 4, precoAquisicao: 24.0, fornecedor: "Distribuidora Central", dataCompra: hojeISO(), obs: "Gira rápido no verão" },
-      { sku: "rose-verao", nome: "Rosé de Verão", tipo: "Rosé", uva: "Pinot Noir", produtor: "Casa Rosada", qtd: 6, minimo: 3, precoAquisicao: 31.9, fornecedor: "Importadora Sul", dataCompra: hojeISO(), obs: "" },
-    ],
-  };
-  return d;
+  // Sem vinhos de exemplo — o app começa vazio para você cadastrar os seus.
+  return { fornecedores: [], vigiados: [], precos: [], compras: [], estoque: [] };
 }
 
 // ======================================================================
@@ -560,6 +829,7 @@ function SEED() {
 async function iniciar() {
   marcarModo();
   montarFiltros();
+  montarFiltrosOfertas();
   try { await carregar(); }
   catch (err) { console.error(err); toast("Não consegui ler a planilha — confira o SETUP."); DADOS = lerLocal() || SEED(); }
   irPara("estoque");

@@ -98,6 +98,71 @@ para isso — a leitura roda direto no celular.
 
 ---
 
+## Fase 3A — Alerta de preço do fornecedor (aba Preços) — nada a configurar
+
+O app ganhou a aba **Preços**. Ela mostra, para cada vinho, **quanto você paga**
+e a **variação desde a compra anterior** — em vermelho/âmbar quando **subiu**,
+verde quando caiu. Tudo isso sai do seu **histórico de compras** (o que você
+registra na mão + o que a IA lê dos orçamentos). Não precisa mexer em planilha
+nem em Apps Script: se você já usa Compras, a aba Preços já funciona.
+
+- Quanto mais compras você registra do mesmo vinho, mais o radar aprende (mostra
+  o **menor preço já pago** e o **mini-gráfico** do histórico).
+- O filtro **"⚠ Subiu de preço"** deixa só os que ficaram mais caros — ótimo para
+  revisar antes de fechar o próximo pedido.
+- Tocar no nome abre a ficha do vinho para editar.
+
+> 💡 Dica: leia os orçamentos da distribuidora pela aba **Compras → 📷 Ler nota
+> fiscal**. Cada item lido vira uma compra e alimenta o radar de preço sozinho.
+
+## Fase 3B — Radar de preço público (Buscapé) — precisa da planilha ligada
+
+O backend busca cada vinho do estoque no **Buscapé** (que agrega várias lojas),
+escolhe o resultado que casa com o rótulo (regra estrita: mostra só com alta
+confiança) e guarda o menor preço público. Quando esse preço fica **abaixo do
+que você paga**, o card mostra **"💰 abaixo do que você paga"** e você recebe um
+e-mail. Sempre aparece o **produto encontrado + link** para você conferir.
+
+> 🔎 É **preço público** (não o de sócio logado) — um norte para conferência.
+> Rótulos de importadora exclusiva costumam não ter preço público: nesses o app
+> deixa em branco de propósito, em vez de mostrar um match errado.
+
+### 1) Atualize o "mini-servidor"
+Cole a versão nova do `apps-script.gs` por cima (Extensões → Apps Script → apague
+tudo → cole) e salve. A aba `Precos` é criada sozinha na primeira busca.
+
+### 2) Ligue a busca diária
+No Apps Script, escolha a função **`instalarGatilhoDiario`** e clique em
+**▶ Executar** (autorize se pedir). Ele passa a rodar todo dia por volta das 8h.
+
+### 3) (Opcional) Quem recebe o e-mail
+Em **Configurações do projeto → Propriedades do script**, crie `EMAIL_ALERTA`
+= o e-mail dos avisos. Sem isso, vai para o dono da planilha.
+
+### 4) Republicar
+Como o código mudou: **Implantar → Gerenciar implantações → editar (lápis) →
+Nova versão**. O link `/exec` continua o mesmo.
+
+### No dia a dia
+- Aba **Preços → "🌐 Buscar preços"** força a busca na hora (leva 1–2 min se
+  tiver muitos vinhos).
+- Vinho com preço de varejo abaixo do seu custo fica com selo verde 💰, e a linha
+  mostra **em qual loja** está mais barato.
+- Se um rótulo não tem preço público, ele simplesmente não mostra a linha — é o
+  esperado para vinhos de importadora exclusiva.
+
+### Lojas de confiança (além do Buscapé)
+Aba **Preços → "🏪 Lojas"**: cadastre lojas que **você confia** colando o
+endereço (ex.: `https://vinoeamorebr.com.br`). O radar passa a buscar no Buscapé
+**+ nessas lojas** e mostra o menor preço. Funciona com lojas **Nuvemshop** (a
+maioria das lojas de vinho pequenas). A aba `Lojas` na planilha é criada sozinha.
+
+> ⚠️ O app confirma que a loja é *tecnicamente* legítima (lê o preço), mas **não
+> avalia se o vendedor é sério**. Antes de comprar de uma loja nova, confira
+> Reclame Aqui, avaliações e CNPJ. Preço muito abaixo dos outros pode ser alerta.
+
+---
+
 ## Dúvidas comuns
 
 - **"Apareceu erro de token"** → a senha em `API_TOKEN` (app.js) tem que ser

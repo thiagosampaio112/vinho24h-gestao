@@ -35,7 +35,10 @@
     </div>
 
     <div class="filtros" id="filtros"></div>
-    <div class="resultado-info" id="resultado-info"></div>
+    <div class="estoque-barra">
+      <div class="resultado-info" id="resultado-info"></div>
+      <button class="btn-selecionar" id="btn-selecionar">☑ Selecionar</button>
+    </div>
 
     <main id="grade" class="grade"></main>
 
@@ -58,6 +61,20 @@
     </div>
   </section>
 
+  <!-- ====================== ABA: PREÇOS (radar de preço por vinho) ====================== -->
+  <section id="aba-ofertas" class="aba hidden">
+    <div class="compras-acoes ofertas-acoes" id="ofertas-acoes">
+      <button class="btn-secundario" id="btn-buscar-publico">🌐 Buscar preços</button>
+      <button class="btn-secundario" id="btn-lojas">🏪 Lojas</button>
+    </div>
+    <div class="filtros" id="ofertas-filtros"></div>
+    <div class="resultado-info" id="ofertas-info"></div>
+    <main id="lista-ofertas" class="lista-ofertas"></main>
+    <div id="vazio-ofertas" class="vazio hidden">
+      <p>Ainda não há histórico de preço.<br />Registre compras (ou leia uma nota) para o radar aprender o que você paga em cada vinho.</p>
+    </div>
+  </section>
+
   <!-- ====================== NAVEGAÇÃO INFERIOR ====================== -->
   <nav class="nav-inferior">
     <button class="nav-btn ativo" data-aba="estoque">
@@ -65,6 +82,9 @@
     </button>
     <button class="nav-btn" data-aba="compras">
       <span class="nav-ico">🧾</span><span>Compras</span>
+    </button>
+    <button class="nav-btn" data-aba="ofertas">
+      <span class="nav-ico">🏷️</span><span>Preços</span>
     </button>
     <button class="nav-btn nav-fab" id="fab-add" title="Adicionar garrafa">+</button>
   </nav>
@@ -199,6 +219,37 @@
           <button type="submit" class="btn-primario">Salvar</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- ====================== MODAL: LOJAS DE CONFIANÇA ====================== -->
+  <div id="modal-lojas" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-conteudo">
+      <div class="modal-topo">
+        <h2>Lojas de confiança</h2>
+        <button class="modal-fechar" data-fecha aria-label="Fechar">✕</button>
+      </div>
+      <p class="dica">O radar busca no <b>Buscapé</b> + nestas lojas que você aprovar, e mostra o
+        menor preço. Funciona com lojas <b>Nuvemshop</b> (a maioria das lojas de vinho pequenas).
+        ⚠️ Só adicione lojas em que você confia — o app não avalia se o vendedor é sério.</p>
+      <div id="lista-lojas" class="lista-lojas"></div>
+      <form id="form-loja" class="form">
+        <label>Endereço da loja
+          <input name="url" type="url" required placeholder="https://exemplo.com.br" />
+        </label>
+        <label>Apelido (opcional) <input name="nome" placeholder="Ex.: Vino e Amore" /></label>
+        <p class="dica" id="loja-status"></p>
+        <div class="form-botoes"><button type="submit" class="btn-primario">+ Adicionar loja</button></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ====================== BARRA DE SELEÇÃO (excluir vários) ====================== -->
+  <div id="selecao-barra" class="selecao-barra hidden">
+    <span id="selecao-info">Toque nas garrafas para selecionar</span>
+    <div class="selecao-acoes">
+      <button class="btn-secundario" id="btn-selecao-cancelar">Cancelar</button>
+      <button class="btn-perigo" id="btn-selecao-excluir" disabled>🗑 Excluir</button>
     </div>
   </div>
 

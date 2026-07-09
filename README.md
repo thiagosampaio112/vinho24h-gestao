@@ -37,4 +37,19 @@ A Fase 2 (leitura de nota por IA) é opcional e vem depois.
 ## Roadmap
 - **Fase 2** ✅ — leitura de nota fiscal por foto/PDF com IA (Google Gemini),
   com tela de conferência antes de salvar. Falta (futuro): ler QR Code da NF-e.
-- **Fase 3** — pesquisa de preços em vários sites (comparar se comprou bem).
+- **Fase 3** — inteligência de preço, em duas partes:
+  - **3A ✅ Alerta do fornecedor** (aba **Preços**): a partir do histórico de
+    compras (inclusive o que a IA lê dos orçamentos), o app mostra **o que você
+    paga em cada vinho** e destaca quando um preço **subiu** desde a última
+    compra. Cobre 100% do catálogo, é exato e não depende de site nenhum. Não
+    precisa configurar nada — usa dados que você já registra.
+  - **3B ✅ Radar público** (aba **Preços**): o backend busca cada rótulo do
+    estoque no **Buscapé** (que agrega várias lojas) **+ nas "lojas de confiança"**
+    que você cadastrar (qualquer loja **Nuvemshop**), casa o produto certo com
+    regra estrita (mostra só quando tem alta confiança; "sem preço" no resto),
+    pega o **menor preço entre todas as fontes** e avisa quando está **abaixo do
+    que você paga**. Roda 1x/dia e manda e-mail; dá para forçar pelo botão.
+    Cobertura parcial e proposital: rótulos de importadora exclusiva não têm
+    preço público (ficam em branco, sem inventar); rótulos de varejo casam bem.
+    É **preço público** — um norte para conferência, não o de sócio. Você decide
+    quais lojas confiar (o app não avalia a idoneidade do vendedor).
