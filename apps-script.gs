@@ -194,9 +194,11 @@ function ajustarQtd(sku, qtd) {
 function registrarCompra(compra) {
   var sh = _aba(ABA_COMPRAS, COL_COMPRAS);
   sh.appendRow(_objParaLinha(compra, COL_COMPRAS));
-  // Atualiza o estoque: soma a quantidade e guarda último preço/fornecedor/data.
+  // A compra entra na RETAGUARDA. Casa pelo sku (vindo da conferência da nota) e,
+  // se não houver, pelo nome. Cria o rótulo se não existir.
   var est = _aba(ABA_ESTOQUE, COL_ESTOQUE);
-  var linha = _acharLinhaPorNome(est, compra.nome);
+  var linha = compra.sku ? _acharLinha(est, compra.sku) : -1;
+  if (linha < 0) linha = _acharLinhaPorNome(est, compra.nome);
   if (linha > 0) {
     var qCol = COL_ESTOQUE.indexOf("qtd") + 1;
     var atual = _num(est.getRange(linha, qCol).getValue());
@@ -204,11 +206,16 @@ function registrarCompra(compra) {
     if (compra.precoUnit) est.getRange(linha, COL_ESTOQUE.indexOf("precoAquisicao") + 1).setValue(_num(compra.precoUnit));
     if (compra.fornecedor) est.getRange(linha, COL_ESTOQUE.indexOf("fornecedor") + 1).setValue(compra.fornecedor);
     if (compra.data) est.getRange(linha, COL_ESTOQUE.indexOf("dataCompra") + 1).setValue(compra.data);
+    if (compra.codigoBarras) {
+      var cbCol = COL_ESTOQUE.indexOf("codigoBarras") + 1;
+      if (!String(est.getRange(linha, cbCol).getValue()).trim()) est.getRange(linha, cbCol).setValue(compra.codigoBarras);
+    }
   } else {
     est.appendRow(_objParaLinha({
-      sku: _slug(compra.nome), nome: compra.nome, tipo: "Tinto", uva: "", produtor: "",
+      sku: compra.sku || _slug(compra.nome), nome: compra.nome, tipo: "Tinto", uva: "", produtor: "",
       qtd: _num(compra.qtd), minimo: 3, precoAquisicao: _num(compra.precoUnit),
-      fornecedor: compra.fornecedor || "", dataCompra: compra.data || "", obs: ""
+      fornecedor: compra.fornecedor || "", dataCompra: compra.data || "", obs: "",
+      codigo: "", codigoBarras: compra.codigoBarras || "", categoria: "", precoVenda: 0
     }, COL_ESTOQUE));
   }
   _garanteFornecedor(compra.fornecedor);

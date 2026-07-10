@@ -139,16 +139,20 @@ async function registrarCompra(compra) {
   if (online()) { await apiPost("registrarCompra", { compra }); }
   else {
     DADOS.compras.unshift(compra);
-    // Atualiza estoque: soma quantidade e guarda último preço/fornecedor.
-    let item = DADOS.estoque.find((x) => x.nome.toLowerCase() === compra.nome.toLowerCase());
+    // A compra entra na RETAGUARDA do rótulo. Casa pelo sku (quando veio da
+    // conferência da nota) e, se não, pelo nome. Cria o rótulo se não existir.
+    let item = compra.sku ? DADOS.estoque.find((x) => x.sku === compra.sku) : null;
+    if (!item) item = DADOS.estoque.find((x) => x.nome.toLowerCase() === compra.nome.toLowerCase());
     if (item) {
       item.qtd = (Number(item.qtd) || 0) + Number(compra.qtd);
       if (compra.precoUnit) item.precoAquisicao = compra.precoUnit;
       if (compra.fornecedor) item.fornecedor = compra.fornecedor;
       if (compra.data) item.dataCompra = compra.data;
+      if (compra.codigoBarras && !item.codigoBarras) item.codigoBarras = compra.codigoBarras;
     } else {
-      DADOS.estoque.push({ sku: novoSku(compra.nome), nome: compra.nome, tipo: "Tinto", uva: "", produtor: "",
-        qtd: Number(compra.qtd), minimo: 3, precoAquisicao: compra.precoUnit || 0,
+      DADOS.estoque.push({ sku: compra.sku || novoSku(compra.nome), nome: compra.nome, tipo: "Tinto", uva: "", produtor: "",
+        qtd: Number(compra.qtd), minimo: 3, precoAquisicao: compra.precoUnit || 0, precoVenda: 0,
+        codigo: "", codigoBarras: compra.codigoBarras || "", categoria: "",
         fornecedor: compra.fornecedor || "", dataCompra: compra.data || "", obs: "" });
     }
     registrarFornecedor(compra.fornecedor); gravarLocal();
@@ -834,8 +838,9 @@ async function lerNotaIA(base64, mime) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODELO_IA}:generateContent?key=${encodeURIComponent(GEMINI_KEY)}`;
   const instrucao =
     "Esta é uma nota fiscal ou cupom de compra de vinhos/bebidas. Extraia os itens comprados. " +
-    "Responda em JSON no formato: {\"fornecedor\":\"\",\"data\":\"AAAA-MM-DD\",\"itens\":[{\"nome\":\"\",\"qtd\":0,\"precoUnit\":0}]}. " +
-    "nome = descrição do produto (limpa, sem códigos). qtd = quantidade (número). precoUnit = valor unitário em reais (número, ponto decimal). " +
+    "Responda em JSON no formato: {\"fornecedor\":\"\",\"data\":\"AAAA-MM-DD\",\"itens\":[{\"nome\":\"\",\"codigoBarras\":\"\",\"qtd\":0,\"precoUnit\":0}]}. " +
+    "nome = descrição do produto (limpa, sem códigos). codigoBarras = o código de barras EAN/GTIN do item (geralmente 13 dígitos; use \"\" se não aparecer). " +
+    "qtd = quantidade (número). precoUnit = valor unitário em reais (número, ponto decimal). " +
     "Se o fornecedor/emitente aparecer, preencha; senão deixe vazio. Se a data aparecer, use AAAA-MM-DD. Ignore itens que não sejam produtos (frete, impostos, totais).";
   const body = {
     contents: [{ parts: [{ inline_data: { mime_type: mime, data: base64 } }, { text: instrucao }] }],
@@ -852,48 +857,84 @@ async function lerNotaIA(base64, mime) {
 }
 
 // ---- Modal de conferência dos itens lidos ----
+let confNota = null;
 function abrirModalNota(nota) {
   const f = $("#form-nota");
   f.reset();
   f.fornecedor.value = nota.fornecedor || "";
   f.data.value = (nota.data && /^\d{4}-\d{2}-\d{2}$/.test(nota.data)) ? nota.data : hojeISO();
-  const itens = Array.isArray(nota.itens) ? nota.itens : [];
-  $("#nota-itens").innerHTML = `<div class="nota-cab"><span>Produto</span><span>Qtd</span><span>Unit. R$</span><span></span></div>`;
-  if (itens.length === 0) linhaItemNota({});
-  else itens.forEach((it) => linhaItemNota(it));
+  const itens = Array.isArray(nota.itens) && nota.itens.length ? nota.itens : [{}];
+  const reserv = new Set();
+  confNota = { linhas: itens.map((it) => linhaNotaModelo(it, reserv)) };
+  renderNotaItens();
   atualizarDatalists();
   abrir("#modal-nota");
 }
-
-function linhaItemNota(it) {
-  const div = el("div", "nota-item");
-  div.innerHTML = `
-    <input class="i-nome" type="text" value="${(it.nome || "").replace(/"/g, "&quot;")}" placeholder="Nome do vinho" />
-    <input class="i-qtd" type="number" min="0" step="1" inputmode="numeric" value="${Number(it.qtd) || ""}" placeholder="0" />
-    <input class="i-preco" type="number" min="0" step="0.01" inputmode="decimal" value="${Number(it.precoUnit) || ""}" placeholder="0,00" />
-    <button type="button" class="nota-x" aria-label="Remover">✕</button>`;
-  div.querySelector(".nota-x").addEventListener("click", () => div.remove());
-  $("#nota-itens").appendChild(div);
+// Cria o modelo de uma linha da nota, já com a sugestão de casamento.
+function linhaNotaModelo(it, reserv) {
+  const l = { nome: it.nome || "", qtd: Number(it.qtd) || 0, precoUnit: Number(it.precoUnit) || 0, codigoBarras: it.codigoBarras || "" };
+  rematchNota(l, reserv);
+  return l;
+}
+// (Re)calcula com qual rótulo do estoque esta linha casa.
+function rematchNota(l, reserv) {
+  const m = casarRotulo({ codigoBarras: l.codigoBarras || "", codigo: "", nome: l.nome || "" });
+  l.skuAlvo = m.item ? m.item.sku : "";
+  l.nomeAlvo = m.item ? m.item.nome : "";
+  l.forte = m.forte;
+  l.criarNovo = !m.item;
+  if (!m.item) l.skuNovo = gerarSku(l.nome || "item", reserv || new Set(confNota.linhas.map((x) => x.skuNovo).filter(Boolean)));
+}
+function renderNotaItens() {
+  const cont = $("#nota-itens");
+  cont.innerHTML = `<div class="nota-cab"><span>Produto</span><span>Qtd</span><span>Unit. R$</span><span></span></div>`;
+  confNota.linhas.forEach((l, idx) => {
+    const casou = !l.criarNovo && l.skuAlvo;
+    const badge = casou
+      ? `<span class="conf-badge ${l.forte ? "ok" : "fraco"}">→ ${escaparHtml(l.nomeAlvo)}${l.forte ? "" : " ?"}</span>`
+      : `<span class="conf-badge novo">＋ novo rótulo</span>`;
+    const div = el("div", "nota-item-bloco");
+    div.innerHTML = `
+      <div class="nota-item">
+        <input class="i-nome" type="text" value="${escaparAttr(l.nome)}" placeholder="Nome do vinho" />
+        <input class="i-qtd" type="number" min="0" step="1" inputmode="numeric" value="${l.qtd || ""}" placeholder="0" />
+        <input class="i-preco" type="number" min="0" step="0.01" inputmode="decimal" value="${l.precoUnit || ""}" placeholder="0,00" />
+        <button type="button" class="nota-x" aria-label="Remover">✕</button>
+      </div>
+      <div class="nota-match">${badge}${l.skuAlvo ? ` <button type="button" class="conf-toggle">${l.criarNovo ? "casar com este" : "criar novo"}</button>` : ""}</div>`;
+    const nomeInp = div.querySelector(".i-nome");
+    nomeInp.addEventListener("input", (e) => { l.nome = e.target.value; });
+    nomeInp.addEventListener("change", () => { rematchNota(l); renderNotaItens(); });
+    div.querySelector(".i-qtd").addEventListener("input", (e) => { l.qtd = Number(e.target.value) || 0; });
+    div.querySelector(".i-preco").addEventListener("input", (e) => { l.precoUnit = Number(e.target.value) || 0; });
+    div.querySelector(".nota-x").addEventListener("click", () => { confNota.linhas.splice(idx, 1); if (!confNota.linhas.length) confNota.linhas.push(linhaNotaModelo({}, new Set())); renderNotaItens(); });
+    const tg = div.querySelector(".conf-toggle");
+    if (tg) tg.addEventListener("click", () => {
+      l.criarNovo = !l.criarNovo;
+      if (l.criarNovo && !l.skuNovo) l.skuNovo = gerarSku(l.nome || "item", new Set(confNota.linhas.map((x) => x.skuNovo).filter(Boolean)));
+      renderNotaItens();
+    });
+    cont.appendChild(div);
+  });
 }
 
-$("#btn-add-item-nota").addEventListener("click", () => linhaItemNota({}));
+$("#btn-add-item-nota").addEventListener("click", () => { confNota.linhas.push(linhaNotaModelo({}, new Set())); renderNotaItens(); });
 
 $("#form-nota").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
   const fornecedor = f.fornecedor.value.trim();
   const data = f.data.value || hojeISO();
-  const linhas = $$("#nota-itens .nota-item");
   const compras = [];
-  linhas.forEach((l) => {
-    const nome = l.querySelector(".i-nome").value.trim();
-    const qtd = Number(l.querySelector(".i-qtd").value) || 0;
-    const precoUnit = Number(l.querySelector(".i-preco").value) || 0;
-    if (nome && qtd > 0) compras.push({ nome, qtd, precoUnit, fornecedor, data, notaChave: "" });
+  confNota.linhas.forEach((l) => {
+    if (l.nome && l.qtd > 0) {
+      const sku = (l.criarNovo || !l.skuAlvo) ? l.skuNovo : l.skuAlvo;
+      compras.push({ nome: l.nome, qtd: l.qtd, precoUnit: l.precoUnit, fornecedor, data, notaChave: "", sku, codigoBarras: l.codigoBarras || "" });
+    }
   });
   if (compras.length === 0) { toast("Preencha ao menos um item (nome e quantidade)"); return; }
   await comProgresso(async () => { for (const c of compras) await registrarCompra(c); });
-  fechar("#modal-nota"); await recarregar(); irPara("compras");
+  fechar("#modal-nota"); await recarregar(); irPara("estoque");
   toast(`${compras.length} ${compras.length === 1 ? "compra salva" : "compras salvas"} ✓`);
 });
 
