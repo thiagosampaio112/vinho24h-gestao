@@ -291,7 +291,7 @@ body {
 }
 .nav-btn {
   background: none; border: none; color: var(--texto-suave); cursor: pointer;
-  display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; padding: 4px 12px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; padding: 4px 9px;
 }
 .nav-btn.ativo { color: var(--dourado-claro); }
 .nav-ico { font-size: 20px; }
@@ -397,3 +397,97 @@ body {
   padding: 12px 20px; border-radius: 999px; font-size: 14px; z-index: 60; box-shadow: var(--sombra);
   max-width: 90%; text-align: center;
 }
+
+/* ==========================================================================
+   FASE 4 — PDV (adega) + retaguarda, importação e giro
+   ========================================================================== */
+.resumo-caixa.vazia .num { color: var(--texto-suave); }
+
+/* Seletor de adega (PDV) */
+.pdv-seletor { display: flex; gap: 8px; overflow-x: auto; max-width: 640px; margin: 0 auto; padding: 10px 18px 0; }
+.pdv-seletor.solo { padding-top: 12px; }
+.pdv-atual-solo { font-size: 13px; font-weight: 700; color: var(--dourado-claro); }
+.pdv-chip {
+  flex: 0 0 auto; padding: 7px 14px; border-radius: 999px; border: 1px solid var(--card-borda);
+  background: transparent; color: var(--texto-suave); font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;
+}
+.pdv-chip.ativo { background: var(--vinho); border-color: var(--dourado); color: var(--dourado-claro); }
+
+.estoque-acoes { display: flex; gap: 10px; max-width: 640px; margin: 0 auto; padding: 10px 18px 0; }
+.estoque-acoes .btn-secundario { flex: 1; padding: 10px 14px; font-size: 14px; }
+
+/* Card do estoque: dois blocos (adega / retaguarda) */
+.item-estoques { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; align-items: stretch; min-width: 128px; }
+.grade.modo-selecao .item-estoques { display: none; }
+.est-bloco { text-align: center; }
+.est-rot { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--texto-suave); margin-bottom: 2px; }
+.est-linha { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.est-num { font-size: 22px; font-weight: 800; color: var(--texto); min-width: 30px; }
+.est-num.secundario { font-size: 20px; color: var(--dourado-claro); min-width: 30px; }
+.item-estoques .qtd-btn { width: 30px; height: 30px; font-size: 18px; border-radius: 8px; }
+.item-estoques .qtd-btn.mais-r { border-color: var(--verde); color: #bff0cf; }
+.btn-abastecer {
+  width: 100%; margin-top: 6px;
+  background: transparent; border: 1px solid var(--dourado); color: var(--dourado-claro);
+  border-radius: 8px; padding: 6px 10px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap;
+}
+.btn-abastecer:disabled { opacity: .35; border-color: var(--card-borda); color: var(--texto-suave); cursor: default; }
+.est-retag { border-top: 1px dashed var(--card-borda); padding-top: 6px; }
+
+.item-meta .lucro b { color: #bff0cf; }
+.item-meta .prejuizo b { color: var(--vermelho); }
+
+.abastecer-nome { color: var(--dourado-claro); font-weight: 700; }
+
+/* Modal mais largo (conferências) */
+.modal-largo { max-width: 720px; }
+
+/* Conferência de importação (planograma / vendas) */
+.conf-resumo { font-size: 13px; color: var(--texto); background: var(--card); border: 1px solid var(--card-borda); border-radius: 10px; padding: 9px 12px; }
+.conf-periodo { font-size: 13px; color: var(--dourado-claro); }
+.conf-periodo b { color: var(--texto); }
+.conf-lista { display: flex; flex-direction: column; gap: 7px; max-height: 52vh; overflow-y: auto; margin: 4px 0; }
+.conf-linha {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--card); border: 1px solid var(--card-borda); border-radius: 10px; padding: 8px 10px;
+}
+.conf-linha.off { opacity: .45; }
+.conf-ck input { width: 20px; height: 20px; accent-color: var(--dourado); }
+.conf-corpo { flex: 1 1 auto; min-width: 0; }
+.conf-nome { font-size: 14px; font-weight: 600; color: var(--texto); }
+.conf-cat { font-weight: 400; color: var(--texto-suave); font-size: 11px; }
+.conf-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 3px; }
+.conf-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+.conf-badge.ok { background: #1f4d33; color: #bff0cf; }
+.conf-badge.fraco { background: #6b5312; color: #fbe6a6; }
+.conf-badge.novo { background: var(--bordo-claro); color: var(--dourado-claro); border: 1px solid var(--dourado); }
+.conf-toggle { background: none; border: none; color: var(--dourado-claro); font-size: 12px; text-decoration: underline; cursor: pointer; padding: 0; }
+.conf-desc { font-size: 11px; color: var(--texto-suave); }
+.conf-desc b { color: var(--texto); }
+.conf-qtd { flex: 0 0 auto; text-align: center; }
+.conf-qtd small { display: block; font-size: 10px; color: var(--texto-suave); }
+.conf-qtd input { width: 62px; background: var(--bordo); border: 1px solid var(--card-borda); border-radius: 8px; padding: 7px; color: var(--texto); text-align: center; font-size: 15px; outline: none; }
+.conf-qtd input:focus { border-color: var(--dourado); }
+
+/* Aba Giro */
+.giro-topo { display: flex; gap: 10px; max-width: 640px; margin: 0 auto; padding: 12px 18px 4px; }
+.giro-select {
+  flex: 1; background: var(--card); border: 1px solid var(--card-borda); border-radius: 10px;
+  padding: 10px 12px; color: var(--texto); font-size: 14px; outline: none; font-family: inherit;
+}
+.giro-select:focus { border-color: var(--dourado); }
+.giro-topo .btn-secundario { flex: 0 0 auto; padding: 10px 14px; font-size: 13px; }
+.btn-icone { flex: 0 0 auto; padding: 10px 12px; font-size: 15px; line-height: 1; }
+.giro-x { flex: 0 0 auto; background: none; border: none; color: var(--texto-suave); font-size: 15px; cursor: pointer; padding: 4px 2px; align-self: flex-start; }
+.giro-x:hover { color: var(--vermelho); }
+.giro-lista { display: flex; flex-direction: column; gap: 10px; padding: 10px 18px 24px; max-width: 640px; margin: 0 auto; }
+.giro-item { display: flex; align-items: center; gap: 12px; background: var(--card); border: 1px solid var(--card-borda); border-radius: 12px; padding: 12px 14px; }
+.giro-info { flex: 1 1 auto; min-width: 0; }
+.giro-nome { font-weight: 700; color: var(--dourado-claro); }
+.giro-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 5px; font-size: 12px; color: var(--texto-suave); }
+.giro-meta b { color: var(--texto); font-weight: 600; }
+.giro-meta .lucro b { color: #bff0cf; }
+.giro-meta .prejuizo b { color: var(--vermelho); }
+.giro-qtd { flex: 0 0 auto; text-align: center; }
+.giro-num { font-size: 24px; font-weight: 800; color: var(--texto); }
+.giro-qtd small { display: block; font-size: 10px; color: var(--texto-suave); }

@@ -29,6 +29,11 @@
   <section id="aba-estoque" class="aba">
     <div class="painel-resumo" id="painel-resumo"></div>
 
+    <div class="pdv-seletor" id="pdv-seletor"></div>
+    <div class="estoque-acoes">
+      <button class="btn-secundario btn-importar">📥 Importar do sistema (Excel)</button>
+    </div>
+
     <div class="busca-wrap">
       <input id="busca" class="busca" type="search" inputmode="search"
              placeholder="Buscar por nome, uva ou fornecedor…" autocomplete="off" />
@@ -75,6 +80,20 @@
     </div>
   </section>
 
+  <!-- ====================== ABA: GIRO (vendas por período) ====================== -->
+  <section id="aba-giro" class="aba hidden">
+    <div class="painel-resumo" id="giro-painel"></div>
+    <div class="giro-topo">
+      <select id="giro-periodo" class="giro-select" aria-label="Período"></select>
+      <button class="btn-secundario btn-importar">📊 Importar</button>
+      <button class="btn-perigo btn-icone hidden" id="btn-excluir-periodo" title="Excluir este período de vendas">🗑</button>
+    </div>
+    <main id="giro-lista" class="giro-lista"></main>
+    <div id="vazio-giro" class="vazio hidden">
+      <p>Nenhuma venda importada ainda.<br />Baixe o relatório <b>"Total de vendas por produto"</b> do sistema da adega e toque em <b>Importar vendas</b>.</p>
+    </div>
+  </section>
+
   <!-- ====================== NAVEGAÇÃO INFERIOR ====================== -->
   <nav class="nav-inferior">
     <button class="nav-btn ativo" data-aba="estoque">
@@ -85,6 +104,9 @@
     </button>
     <button class="nav-btn" data-aba="ofertas">
       <span class="nav-ico">🏷️</span><span>Preços</span>
+    </button>
+    <button class="nav-btn" data-aba="giro">
+      <span class="nav-ico">📊</span><span>Giro</span>
     </button>
     <button class="nav-btn nav-fab" id="fab-add" title="Adicionar garrafa">+</button>
   </nav>
@@ -109,10 +131,14 @@
         </div>
         <div class="form-linha">
           <label>Produtor <input name="produtor" placeholder="Opcional" /></label>
-          <label>Código/SKU <input name="sku" placeholder="Opcional" /></label>
+          <label>Código/SKU interno <input name="sku" placeholder="Opcional" /></label>
         </div>
         <div class="form-linha">
-          <label>Quantidade <input name="qtd" type="number" min="0" step="1" value="0" inputmode="numeric" /></label>
+          <label>Código do sistema <input name="codigo" placeholder="Ex.: 01022 (opcional)" /></label>
+          <label>Preço de venda (R$) <input name="precoVenda" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00" /></label>
+        </div>
+        <div class="form-linha">
+          <label>Retaguarda (un.) <input name="qtd" type="number" min="0" step="1" value="0" inputmode="numeric" /></label>
           <label>Alerta abaixo de <input name="minimo" type="number" min="0" step="1" value="3" inputmode="numeric" /></label>
         </div>
         <div class="form-linha">
@@ -161,6 +187,9 @@
 
   <!-- Entrada de arquivo (foto da câmera ou PDF) — escondida -->
   <input id="input-nota" type="file" accept="image/*,application/pdf" class="hidden" />
+
+  <!-- Entrada de planilha (planograma / vendas) — escondida -->
+  <input id="input-planilha" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" class="hidden" />
 
   <!-- ====================== MODAL: CONFERIR NOTA (IA) ====================== -->
   <div id="modal-nota" class="modal-overlay hidden" role="dialog" aria-modal="true">
@@ -244,6 +273,65 @@
     </div>
   </div>
 
+  <!-- ====================== MODAL: ABASTECER ADEGA ====================== -->
+  <div id="modal-abastecer" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-conteudo">
+      <div class="modal-topo">
+        <h2>Abastecer adega</h2>
+        <button class="modal-fechar" data-fecha aria-label="Fechar">✕</button>
+      </div>
+      <form id="form-abastecer" class="form">
+        <input type="hidden" name="sku" />
+        <p class="dica">Tira da <b>retaguarda</b> e coloca na <b>adega</b> (à venda). <span id="abastecer-nome" class="abastecer-nome"></span></p>
+        <div class="form-linha">
+          <label>Adega <select name="pdv" id="abastecer-pdv"></select></label>
+          <label>Quantidade <input name="qtd" type="number" min="1" step="1" inputmode="numeric" required /></label>
+        </div>
+        <p class="dica" id="abastecer-disp"></p>
+        <div class="form-botoes"><button type="submit" class="btn-primario">Abastecer</button></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ====================== MODAL: CONFERIR PLANOGRAMA ====================== -->
+  <div id="modal-conf-plano" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-conteudo modal-largo">
+      <div class="modal-topo">
+        <h2>Conferir planograma</h2>
+        <button class="modal-fechar" data-fecha aria-label="Fechar">✕</button>
+      </div>
+      <div class="form">
+        <label>Adega deste relatório <select id="conf-plano-pdv"></select></label>
+        <p class="dica">Isto ajusta a quantidade <b>na adega</b> para bater com o sistema e cadastra os rótulos novos da AMLabs. Não mexe na sua retaguarda nem no seu custo.</p>
+        <p class="conf-resumo" id="conf-plano-resumo"></p>
+        <div id="conf-plano-lista" class="conf-lista"></div>
+        <div class="form-botoes"><button type="button" class="btn-primario" id="btn-conf-plano-salvar">Importar posição</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====================== MODAL: CONFERIR VENDAS ====================== -->
+  <div id="modal-conf-vendas" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-conteudo modal-largo">
+      <div class="modal-topo">
+        <h2>Conferir vendas</h2>
+        <button class="modal-fechar" data-fecha aria-label="Fechar">✕</button>
+      </div>
+      <div class="form">
+        <div class="form-linha">
+          <label>Adega <select id="conf-vendas-pdv"></select></label>
+          <label>De <input type="date" id="conf-vendas-inicio" /></label>
+          <label>Até <input type="date" id="conf-vendas-fim" /></label>
+        </div>
+        <p class="conf-periodo" id="conf-vendas-periodo"></p>
+        <p class="dica">Cada venda <b>desconta da adega</b> e entra no histórico de giro.</p>
+        <p class="conf-resumo" id="conf-vendas-resumo"></p>
+        <div id="conf-vendas-lista" class="conf-lista"></div>
+        <div class="form-botoes"><button type="button" class="btn-primario" id="btn-conf-vendas-salvar">Importar vendas</button></div>
+      </div>
+    </div>
+  </div>
+
   <!-- ====================== BARRA DE SELEÇÃO (excluir vários) ====================== -->
   <div id="selecao-barra" class="selecao-barra hidden">
     <span id="selecao-info">Toque nas garrafas para selecionar</span>
@@ -256,6 +344,7 @@
   <!-- ====================== TOAST ====================== -->
   <div id="toast" class="toast hidden"></div>
 
+  <script src="planilha.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

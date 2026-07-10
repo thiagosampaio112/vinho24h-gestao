@@ -41,8 +41,12 @@ const hojeISO = () => new Date().toISOString().slice(0, 10);
 const dataBR = (iso) => { if (!iso) return "—"; const [a, m, d] = String(iso).slice(0, 10).split("-"); return d && m && a ? `${d}/${m}/${a}` : iso; };
 
 // ---- Estado -------------------------------------------------------------
-let DADOS = { estoque: [], compras: [], fornecedores: [], vigiados: [], precos: [] };
+// Cada RÓTULO (em DADOS.estoque) tem um número de RETAGUARDA (campo `qtd` =
+// garrafas guardadas para repor). As garrafas que estão NA ADEGA (à venda) ficam
+// em DADOS.pdvEstoque, uma linha por (pdv, sku). Assim dá para ter várias adegas.
+let DADOS = { estoque: [], compras: [], fornecedores: [], vigiados: [], precos: [], lojas: [], pdvs: [], pdvEstoque: [], vendas: [] };
 const filtro = { busca: "", tipo: null, baixo: false };
+let pdvAtual = ""; // nome da adega selecionada para visualizar/mexer
 const LS_KEY = "vinho24h_gestao_dados_v2";
 
 // ======================================================================
@@ -80,6 +84,31 @@ async function carregar() {
   }
   DADOS.estoque = DADOS.estoque || []; DADOS.compras = DADOS.compras || []; DADOS.fornecedores = DADOS.fornecedores || [];
   DADOS.vigiados = DADOS.vigiados || []; DADOS.precos = DADOS.precos || []; DADOS.lojas = DADOS.lojas || [];
+  DADOS.pdvs = DADOS.pdvs || []; DADOS.pdvEstoque = DADOS.pdvEstoque || []; DADOS.vendas = DADOS.vendas || [];
+  // Sempre há ao menos uma adega. A 1ª ativa é a "adega atual" da tela.
+  if (!DADOS.pdvs.length) DADOS.pdvs = [{ nome: "Ecopark", ativo: "sim" }];
+  const ativas = pdvsAtivos();
+  if (!pdvAtual || !ativas.some((p) => p.nome === pdvAtual)) pdvAtual = (ativas[0] || DADOS.pdvs[0]).nome;
+  // Normaliza números das linhas de PDV.
+  DADOS.pdvEstoque.forEach((r) => { r.qtd = Number(r.qtd) || 0; r.minimo = Number(r.minimo) || 0; r.nivelPar = Number(r.nivelPar) || 0; });
+}
+
+// --- Ajudantes de PDV (ponto de venda / adega) ---
+function pdvsAtivos() {
+  return (DADOS.pdvs || []).filter((p) => {
+    const a = String(p.ativo == null ? "sim" : p.ativo).toLowerCase();
+    return p.nome && a !== "nao" && a !== "não" && a !== "false" && a !== "0";
+  });
+}
+function linhaPdv(sku, pdv) { return DADOS.pdvEstoque.find((r) => r.sku === sku && r.pdv === pdv); }
+function qtdNoPdv(sku, pdv) { const r = linhaPdv(sku, pdv); return r ? (Number(r.qtd) || 0) : 0; }
+function qtdPdvTotal(sku) { return DADOS.pdvEstoque.filter((r) => r.sku === sku).reduce((s, r) => s + (Number(r.qtd) || 0), 0); }
+function minimoPdv(sku, pdv) { const r = linhaPdv(sku, pdv); return r ? (Number(r.minimo) || 0) : 0; }
+// Garante (e devolve) a linha de PDV de um rótulo numa adega, no estado local.
+function garantirLinhaPdv(sku, pdv) {
+  let r = linhaPdv(sku, pdv);
+  if (!r) { r = { pdv, sku, qtd: 0, minimo: 0, nivelPar: 0 }; DADOS.pdvEstoque.push(r); }
+  return r;
 }
 
 // Gera um SKU simples quando o item não tem um.
@@ -105,12 +134,6 @@ async function salvarItem(item, skuOriginal) {
 async function excluirItem(sku) {
   if (online()) { await apiPost("excluirItem", { sku }); }
   else { DADOS.estoque = DADOS.estoque.filter((x) => x.sku !== sku); gravarLocal(); }
-}
-async function ajustarQtd(sku, delta) {
-  const item = DADOS.estoque.find((x) => x.sku === sku); if (!item) return;
-  const nova = Math.max(0, (Number(item.qtd) || 0) + delta);
-  if (online()) { await apiPost("ajustarQtd", { sku, qtd: nova }); item.qtd = nova; }
-  else { item.qtd = nova; gravarLocal(); }
 }
 async function registrarCompra(compra) {
   if (online()) { await apiPost("registrarCompra", { compra }); }
@@ -160,6 +183,134 @@ async function excluirLoja(url) {
   else { DADOS.lojas = DADOS.lojas.filter((l) => l.url !== url); gravarLocal(); }
 }
 
+// ======================================================================
+//  CASAMENTO DE RÓTULOS  (usado ao importar planograma/vendas)
+// ======================================================================
+const _STOP_ROT = new Set(["vinho","tinto","branco","rose","rosado","seco","suave","doce","fino","meio","de","do","da","com","e","o","a","ml","un","und","garrafa","reserva"]);
+function normTexto(s) { return String(s == null ? "" : s).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim(); }
+function tokensRot(s) { return normTexto(s).split(" ").filter((w) => w && w.length >= 2 && !_STOP_ROT.has(w) && !/^\d+$/.test(w)); }
+// Compara códigos ignorando zeros à esquerda ("00975" == "975").
+function mesmoCodigo(a, b) { a = String(a || "").trim(); b = String(b || "").trim(); if (!a || !b) return false; return a === b || a.replace(/^0+/, "") === b.replace(/^0+/, ""); }
+// Acha o rótulo do estoque que corresponde a uma linha importada.
+// Devolve { item, forte } — forte = casou por código ou nome idêntico (seguro).
+function casarRotulo(linha) {
+  const cods = [linha.codigo, linha.codigoBarras].filter(Boolean);
+  // 1) por código (o planograma e as vendas usam o mesmo código do sistema)
+  for (const it of DADOS.estoque) {
+    const alvos = [it.codigo, it.codigoBarras, it.sku];
+    if (cods.some((c) => alvos.some((a) => mesmoCodigo(c, a)))) return { item: it, forte: true };
+  }
+  // 2) por nome idêntico (normalizado)
+  const nn = normTexto(linha.nome);
+  const exato = DADOS.estoque.find((it) => normTexto(it.nome) === nn && nn);
+  if (exato) return { item: exato, forte: true };
+  // 3) por tokens (sugestão fraca — o usuário confirma na tela)
+  const q = tokensRot(linha.nome);
+  if (q.length) {
+    let melhor = null, melhorScore = 0;
+    for (const it of DADOS.estoque) {
+      const t = new Set(tokensRot(it.nome));
+      let hits = 0; q.forEach((w) => { if (t.has(w)) hits++; });
+      const score = hits / q.length;
+      if (score > melhorScore) { melhorScore = score; melhor = it; }
+    }
+    if (melhor && melhorScore >= 0.6) return { item: melhor, forte: false };
+  }
+  return { item: null, forte: false };
+}
+
+// ======================================================================
+//  MOVIMENTOS DE ESTOQUE ↔ PDV
+// ======================================================================
+// Abastecer a adega: tira da retaguarda (qtd) e põe no PDV.
+async function abastecerPdv(sku, pdv, qtd) {
+  qtd = Number(qtd) || 0; if (qtd <= 0) return;
+  if (online()) { await apiPost("abastecerPdv", { sku, pdv, qtd }); }
+  else {
+    const item = DADOS.estoque.find((x) => x.sku === sku); if (!item) return;
+    item.qtd = Math.max(0, (Number(item.qtd) || 0) - qtd);
+    garantirLinhaPdv(sku, pdv).qtd += qtd;
+    gravarLocal();
+  }
+}
+// Ajuste direto da quantidade na adega (correção manual, +/−).
+async function ajustarPdv(sku, pdv, delta) {
+  const atual = qtdNoPdv(sku, pdv);
+  const nova = Math.max(0, atual + delta);
+  if (online()) { await apiPost("ajustarPdv", { sku, pdv, qtd: nova }); garantirLinhaPdv(sku, pdv).qtd = nova; }
+  else { garantirLinhaPdv(sku, pdv).qtd = nova; gravarLocal(); }
+}
+// Ajuste direto da retaguarda (+/−).
+async function ajustarQtd(sku, delta) {
+  const item = DADOS.estoque.find((x) => x.sku === sku); if (!item) return;
+  const nova = Math.max(0, (Number(item.qtd) || 0) + delta);
+  if (online()) { await apiPost("ajustarQtd", { sku, qtd: nova }); item.qtd = nova; }
+  else { item.qtd = nova; gravarLocal(); }
+}
+
+// ======================================================================
+//  IMPORTAR — aplica as linhas já conferidas pelo usuário
+//  resolvidos = [{ sku, novo, rotulo:{...}, quantAtual, minimo, nivelPar }]  (planograma)
+//             = [{ sku, novo, rotulo:{...}, qtd, precoMedio, valorVendido, ... }] (vendas)
+// ======================================================================
+async function aplicarImportPlanograma(pdv, resolvidos) {
+  if (online()) { await apiPost("importarPlanograma", { pdv, itens: resolvidos }); return; }
+  resolvidos.forEach((r) => {
+    let item = DADOS.estoque.find((x) => x.sku === r.sku);
+    if (!item) { item = { sku: r.sku, tipo: "Tinto", uva: "", produtor: "", qtd: 0, minimo: 0, precoAquisicao: 0, fornecedor: "", dataCompra: "", obs: "" }; DADOS.estoque.push(item); }
+    // Atualiza o cadastro com o que veio do sistema (sem tocar no seu custo/fornecedor).
+    const d = r.rotulo || {};
+    if (d.nome) item.nome = d.nome;
+    if (d.codigo) item.codigo = d.codigo;
+    if (d.codigoBarras) item.codigoBarras = d.codigoBarras;
+    if (d.categoria) item.categoria = d.categoria;
+    if (d.tipo) item.tipo = d.tipo;
+    if (d.precoVenda) item.precoVenda = Number(d.precoVenda) || 0;
+    const linha = garantirLinhaPdv(r.sku, pdv);
+    linha.qtd = Number(r.quantAtual) || 0;
+    if (r.minimo != null) linha.minimo = Number(r.minimo) || 0;
+    if (r.nivelPar != null) linha.nivelPar = Number(r.nivelPar) || 0;
+  });
+  gravarLocal();
+}
+
+async function aplicarImportVendas(periodo, pdv, resolvidos) {
+  if (online()) { await apiPost("importarVendas", { periodoInicio: periodo.inicio, periodoFim: periodo.fim, pdv, itens: resolvidos }); return; }
+  const hoje = hojeISO();
+  resolvidos.forEach((r) => {
+    let item = DADOS.estoque.find((x) => x.sku === r.sku);
+    if (!item && r.novo) { item = { sku: r.sku, nome: (r.rotulo && r.rotulo.nome) || "", tipo: "Tinto", uva: "", produtor: "", qtd: 0, minimo: 0, precoAquisicao: 0, precoVenda: (r.rotulo && r.rotulo.precoVenda) || 0, codigo: (r.rotulo && r.rotulo.codigo) || "", categoria: (r.rotulo && r.rotulo.categoria) || "", fornecedor: "", dataCompra: "", obs: "" }; DADOS.estoque.push(item); }
+    DADOS.vendas.push({ periodoInicio: periodo.inicio, periodoFim: periodo.fim, importadoEm: hoje, pdv,
+      sku: r.sku, codigo: r.codigo || "", descricao: (r.rotulo && r.rotulo.nome) || "", categoria: r.categoria || "",
+      qtd: Number(r.qtd) || 0, precoMedio: Number(r.precoMedio) || 0, valorVendido: Number(r.valorVendido) || 0 });
+    // Cada venda desconta do PDV.
+    if (item) { const linha = garantirLinhaPdv(r.sku, pdv); linha.qtd = Math.max(0, linha.qtd - (Number(r.qtd) || 0)); }
+  });
+  gravarLocal();
+}
+
+// Exclui UMA venda do histórico e DEVOLVE a quantidade à adega (desfaz o desconto).
+async function excluirVenda(venda) {
+  if (online()) { await apiPost("excluirVenda", { venda }); }
+  else {
+    const i = DADOS.vendas.indexOf(venda);
+    if (i >= 0) DADOS.vendas.splice(i, 1);
+    if (venda.sku) garantirLinhaPdv(venda.sku, venda.pdv).qtd += Number(venda.qtd) || 0;
+    gravarLocal();
+  }
+}
+// Exclui TODAS as vendas de um período (pdv+início+fim) e devolve à adega.
+async function excluirVendasPeriodo(pdv, inicio, fim) {
+  const alvo = DADOS.vendas.filter((v) => v.pdv === pdv && v.periodoInicio === inicio && v.periodoFim === fim);
+  if (online()) { await apiPost("excluirVendasPeriodo", { pdv, periodoInicio: inicio, periodoFim: fim }); }
+  else {
+    alvo.forEach((v) => { if (v.sku) garantirLinhaPdv(v.sku, v.pdv).qtd += Number(v.qtd) || 0; });
+    DADOS.vendas = DADOS.vendas.filter((v) => !(v.pdv === pdv && v.periodoInicio === inicio && v.periodoFim === fim));
+    gravarLocal();
+  }
+  return alvo.length;
+}
+
 
 // ======================================================================
 //  RENDER — ESTOQUE
@@ -168,39 +319,58 @@ function itensFiltrados() {
   const q = filtro.busca.trim().toLowerCase();
   return DADOS.estoque.filter((v) => {
     if (filtro.tipo && v.tipo !== filtro.tipo) return false;
-    if (filtro.baixo && !estaBaixo(v)) return false;
+    if (filtro.baixo && !precisaRepor(v)) return false;
     if (q) {
-      const alvo = `${v.nome} ${v.uva} ${v.produtor} ${v.fornecedor} ${v.sku}`.toLowerCase();
+      const alvo = `${v.nome} ${v.uva} ${v.produtor} ${v.fornecedor} ${v.sku} ${v.codigo || ""} ${v.codigoBarras || ""}`.toLowerCase();
       if (!alvo.includes(q)) return false;
     }
     return true;
   });
 }
-const estaBaixo = (v) => (Number(v.qtd) || 0) <= (Number(v.minimo) || 0);
+// "Precisa repor a adega": está na adega atual em quantidade <= mínimo crítico.
+const precisaRepor = (v) => { const m = minimoPdv(v.sku, pdvAtual); return m > 0 && qtdNoPdv(v.sku, pdvAtual) <= m; };
+const semRetaguarda = (v) => (Number(v.qtd) || 0) <= 0;
 
 function renderResumo() {
   const est = DADOS.estoque;
-  const itens = est.length;
-  const garrafas = est.reduce((s, v) => s + (Number(v.qtd) || 0), 0);
-  const valor = est.reduce((s, v) => s + (Number(v.qtd) || 0) * (Number(v.precoAquisicao) || 0), 0);
-  const baixos = est.filter(estaBaixo).length;
+  const naAdega = est.reduce((s, v) => s + qtdNoPdv(v.sku, pdvAtual), 0);
+  const retaguarda = est.reduce((s, v) => s + (Number(v.qtd) || 0), 0);
+  const repor = est.filter(precisaRepor).length;
   $("#painel-resumo").innerHTML = `
-    <div class="resumo-caixa"><span class="num">${garrafas}</span><span class="rot">garrafas</span></div>
-    <div class="resumo-caixa"><span class="num">${brl(valor)}</span><span class="rot">investido</span></div>
-    <div class="resumo-caixa ${baixos ? "alerta" : ""}"><span class="num">${baixos}</span><span class="rot">em falta</span></div>`;
-  void itens;
+    <div class="resumo-caixa"><span class="num">${naAdega}</span><span class="rot">na adega</span></div>
+    <div class="resumo-caixa"><span class="num">${retaguarda}</span><span class="rot">retaguarda</span></div>
+    <div class="resumo-caixa ${repor ? "alerta" : ""}"><span class="num">${repor}</span><span class="rot">repor</span></div>`;
+}
+
+// Barra de seleção da adega (aparece quando há mais de uma; sempre mostra a atual).
+function renderSeletorPdv() {
+  const cont = $("#pdv-seletor"); if (!cont) return;
+  const ativas = pdvsAtivos();
+  cont.innerHTML = "";
+  if (ativas.length <= 1) {
+    cont.classList.add("solo");
+    cont.innerHTML = `<span class="pdv-atual-solo">🏬 ${escaparHtml(pdvAtual || (ativas[0] && ativas[0].nome) || "Adega")}</span>`;
+    return;
+  }
+  cont.classList.remove("solo");
+  ativas.forEach((p) => {
+    const b = el("button", "pdv-chip" + (p.nome === pdvAtual ? " ativo" : ""), "🏬 " + escaparHtml(p.nome));
+    b.addEventListener("click", () => { pdvAtual = p.nome; renderEstoque(); });
+    cont.appendChild(b);
+  });
 }
 
 function classeTipo(t) { return { Tinto: "tag-tinto", Branco: "tag-branco", "Rosé": "tag-rose", Espumante: "tag-espumante" }[t] || "tag-tinto"; }
 
 function renderEstoque() {
   renderResumo();
+  renderSeletorPdv();
   const lista = itensFiltrados();
   const grade = $("#grade");
   const vazio = $("#vazio-estoque");
   grade.innerHTML = "";
   grade.classList.toggle("modo-selecao", modoSelecao);
-  $("#resultado-info").textContent = `${lista.length} ${lista.length === 1 ? "item" : "itens"}`;
+  $("#resultado-info").textContent = `${lista.length} ${lista.length === 1 ? "rótulo" : "rótulos"}`;
   $("#btn-selecionar").classList.toggle("hidden", modoSelecao || DADOS.estoque.length === 0);
 
   if (DADOS.estoque.length === 0) { vazio.classList.remove("hidden"); return; }
@@ -208,34 +378,54 @@ function renderEstoque() {
 
   lista.forEach((v) => {
     const sel = modoSelecao && selecionados.has(v.sku);
-    const item = el("div", "item" + (estaBaixo(v) ? " baixo" : "") + (sel ? " selecionado" : ""));
-    const qtd = Number(v.qtd) || 0;
+    const repor = precisaRepor(v);
+    const item = el("div", "item" + (repor ? " baixo" : "") + (sel ? " selecionado" : ""));
+    const naAdega = qtdNoPdv(v.sku, pdvAtual);
+    const retag = Number(v.qtd) || 0;
+    const margem = (Number(v.precoVenda) || 0) - (Number(v.precoAquisicao) || 0);
+    const metaPreco = v.precoVenda ? `<span>Venda: <b>${brl(v.precoVenda)}</b></span>` : "";
+    const metaCusto = v.precoAquisicao ? `<span>Custo: <b>${brl(v.precoAquisicao)}</b></span>` : "";
+    const metaMargem = (v.precoVenda && v.precoAquisicao)
+      ? `<span class="${margem >= 0 ? "lucro" : "prejuizo"}">Margem: <b>${brl(margem)}</b></span>`
+      : `<span>Fornec.: <b>${escaparHtml(v.fornecedor || "—")}</b></span>`;
     item.innerHTML = `
       <div class="item-check"></div>
       <div class="item-info">
         <div><span class="tag-tipo ${classeTipo(v.tipo)}">${v.tipo || "—"}</span>
-          ${estaBaixo(v) ? '<span class="selo-baixo">⚠ Repor</span>' : ""}</div>
-        <div class="item-nome">${v.nome || "(sem nome)"}</div>
-        <div class="item-linha2">${[v.uva, v.produtor].filter(Boolean).join(" · ") || "&nbsp;"}</div>
-        <div class="item-meta">
-          <span>Compra: <b>${v.precoAquisicao ? brl(v.precoAquisicao) : "—"}</b></span>
-          <span>Fornec.: <b>${v.fornecedor || "—"}</b></span>
-          <span>Desde: <b>${dataBR(v.dataCompra)}</b></span>
-        </div>
+          ${repor ? '<span class="selo-baixo">⚠ Repor adega</span>' : ""}</div>
+        <div class="item-nome">${escaparHtml(v.nome || "(sem nome)")}</div>
+        <div class="item-linha2">${[v.uva, v.produtor].filter(Boolean).map(escaparHtml).join(" · ") || "&nbsp;"}</div>
+        <div class="item-meta">${metaPreco}${metaCusto}${metaMargem}</div>
       </div>
-      <div class="item-qtd">
-        <div class="qtd-num">${qtd}<small>un.</small></div>
-        <div class="qtd-botoes">
-          <button class="qtd-btn menos" aria-label="Diminuir">−</button>
-          <button class="qtd-btn mais" aria-label="Aumentar">+</button>
+      <div class="item-estoques">
+        <div class="est-bloco est-adega">
+          <div class="est-rot">Adega</div>
+          <div class="est-linha">
+            <button class="qtd-btn menos" aria-label="Vendeu/tirou 1 da adega">−</button>
+            <span class="est-num">${naAdega}</span>
+            <button class="qtd-btn mais" aria-label="Aumentar na adega">+</button>
+          </div>
+        </div>
+        <div class="est-bloco est-retag">
+          <div class="est-rot">Retaguarda</div>
+          <div class="est-linha">
+            <button class="qtd-btn menos-r" aria-label="Diminuir retaguarda">−</button>
+            <span class="est-num secundario">${retag}</span>
+            <button class="qtd-btn mais-r" aria-label="Aumentar retaguarda">+</button>
+          </div>
+          <button class="btn-abastecer" ${retag <= 0 ? "disabled" : ""}>↑ Abastecer adega</button>
         </div>
       </div>`;
     if (modoSelecao) {
       item.querySelector(".item-info").addEventListener("click", () => alternarSelecao(v.sku));
     } else {
       item.querySelector(".item-info").addEventListener("click", () => abrirModalItem(v));
-      item.querySelector(".menos").addEventListener("click", async () => { await ajustarQtd(v.sku, -1); renderEstoque(); });
-      item.querySelector(".mais").addEventListener("click", async () => { await ajustarQtd(v.sku, +1); renderEstoque(); });
+      item.querySelector(".menos").addEventListener("click", async () => { await ajustarPdv(v.sku, pdvAtual, -1); renderEstoque(); });
+      item.querySelector(".mais").addEventListener("click", async () => { await ajustarPdv(v.sku, pdvAtual, +1); renderEstoque(); });
+      item.querySelector(".menos-r").addEventListener("click", async () => { await ajustarQtd(v.sku, -1); renderEstoque(); });
+      item.querySelector(".mais-r").addEventListener("click", async () => { await ajustarQtd(v.sku, +1); renderEstoque(); });
+      const ab = item.querySelector(".btn-abastecer");
+      if (ab && retag > 0) ab.addEventListener("click", () => abrirModalAbastecer(v));
     }
     grade.appendChild(item);
   });
@@ -511,6 +701,8 @@ function abrirModalItem(item) {
     f.minimo.value = item.minimo ?? 3; f.precoAquisicao.value = item.precoAquisicao || "";
     f.dataCompra.value = (item.dataCompra || "").slice(0, 10); f.fornecedor.value = item.fornecedor || "";
     f.obs.value = item.obs || "";
+    if (f.codigo) f.codigo.value = item.codigo || "";
+    if (f.precoVenda) f.precoVenda.value = item.precoVenda || "";
   } else { f.dataCompra.value = hojeISO(); }
   atualizarDatalists();
   abrir("#modal-item");
@@ -519,12 +711,19 @@ function abrirModalItem(item) {
 $("#form-item").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
+  // Parte do item existente (se editando) para não perder campos que vieram do
+  // sistema (código de barras, categoria, nível de par) e não estão no formulário.
+  const orig = DADOS.estoque.find((x) => x.sku === (f.sku_original.value || f.sku.value.trim())) || {};
   const item = {
+    ...orig,
     sku: f.sku.value.trim(), nome: f.nome.value.trim(), tipo: f.tipo.value, uva: f.uva.value.trim(),
     produtor: f.produtor.value.trim(), qtd: Number(f.qtd.value) || 0, minimo: Number(f.minimo.value) || 0,
     precoAquisicao: Number(f.precoAquisicao.value) || 0, dataCompra: f.dataCompra.value,
     fornecedor: f.fornecedor.value.trim(), obs: f.obs.value.trim(),
+    codigo: f.codigo ? f.codigo.value.trim() : (orig.codigo || ""),
+    precoVenda: f.precoVenda ? (Number(f.precoVenda.value) || 0) : (orig.precoVenda || 0),
   };
+  delete item.__row;
   if (!item.nome) return;
   await comProgresso(() => salvarItem(item, f.sku_original.value || null));
   fechar("#modal-item"); await recarregar(); toast("Garrafa salva ✓");
@@ -699,6 +898,320 @@ $("#form-nota").addEventListener("submit", async (e) => {
 });
 
 // ======================================================================
+//  IMPORTAR PLANILHA DO SISTEMA (planograma / vendas) — .xlsx ou .csv
+// ======================================================================
+function opcoesPdv(sel) {
+  return pdvsAtivos().map((p) => `<option value="${escaparAttr(p.nome)}" ${p.nome === sel ? "selected" : ""}>${escaparHtml(p.nome)}</option>`).join("");
+}
+function isoMenosDias(dias) { const d = new Date(); d.setDate(d.getDate() - dias); return d.toISOString().slice(0, 10); }
+// Mapeia a categoria do sistema para o nosso "tipo" (Tinto/Branco/Rosé/Espumante).
+function tipoDoRotulo(categoria) {
+  const c = normTexto(categoria);
+  if (/espum/.test(c)) return "Espumante";
+  if (/branco/.test(c)) return "Branco";
+  if (/rose|rosado/.test(c)) return "Rosé";
+  return "Tinto";
+}
+// Gera um SKU único (considerando o estoque + os já reservados neste lote).
+function gerarSku(nome, reservados) {
+  const semAcento = (nome || "item").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const base = semAcento.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "item";
+  let sku = base, i = 2;
+  while (DADOS.estoque.some((x) => x.sku === sku) || reservados.has(sku)) sku = `${base}-${i++}`;
+  reservados.add(sku);
+  return sku;
+}
+
+// Um input só para os dois relatórios — o app detecta qual é.
+$("#input-planilha").addEventListener("change", async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  $("#carregando-msg").textContent = "Lendo a planilha…";
+  abrir("#carregando");
+  try {
+    const r = await lerPlanilha(file);
+    fechar("#carregando");
+    if (r.tipo === "planograma") abrirConfPlanograma(r.itens);
+    else if (r.tipo === "vendas") abrirConfVendas(r.itens);
+    else toast("Não reconheci esse relatório. Use o planograma ou o de vendas por produto.");
+  } catch (err) {
+    fechar("#carregando"); console.error(err);
+    toast("Não consegui ler o arquivo: " + (err.message || "tente outro"));
+  }
+});
+[...$$(".btn-importar")].forEach((b) => b.addEventListener("click", () => $("#input-planilha").click()));
+
+// ---- Conferência do PLANOGRAMA (posição atual da adega) ----
+let confPlano = null;
+function abrirConfPlanograma(itens) {
+  const reservados = new Set();
+  const linhas = itens.map((it) => {
+    const m = casarRotulo(it);
+    return {
+      ...it,
+      incluir: true,
+      criarNovo: !m.item,
+      skuAlvo: m.item ? m.item.sku : "",
+      nomeAlvo: m.item ? m.item.nome : "",
+      forte: m.forte,
+      skuNovo: m.item ? "" : gerarSku(it.nome, reservados),
+    };
+  });
+  confPlano = { pdv: pdvAtual, linhas };
+  $("#conf-plano-pdv").innerHTML = opcoesPdv(pdvAtual);
+  renderConfPlano();
+  abrir("#modal-conf-plano");
+}
+function renderConfPlano() {
+  const linhas = confPlano.linhas;
+  const inc = linhas.filter((l) => l.incluir);
+  const novos = inc.filter((l) => l.criarNovo || !l.skuAlvo).length;
+  const atualiza = inc.length - novos;
+  $("#conf-plano-resumo").innerHTML = `<b>${inc.length}</b> de ${linhas.length} produtos · ${atualiza} atualizam a adega · ${novos} rótulos novos`;
+  const cont = $("#conf-plano-lista");
+  cont.innerHTML = "";
+  linhas.forEach((l, idx) => {
+    const casou = !l.criarNovo && l.skuAlvo;
+    const badge = casou
+      ? `<span class="conf-badge ${l.forte ? "ok" : "fraco"}">→ ${escaparHtml(l.nomeAlvo)}${l.forte ? "" : " ?"}</span>`
+      : `<span class="conf-badge novo">＋ novo rótulo</span>`;
+    const div = el("div", "conf-linha" + (l.incluir ? "" : " off"));
+    div.innerHTML = `
+      <label class="conf-ck"><input type="checkbox" ${l.incluir ? "checked" : ""} data-i="${idx}" /></label>
+      <div class="conf-corpo">
+        <div class="conf-nome">${escaparHtml(l.nome)} <small class="conf-cat">${escaparHtml(l.categoria || "")}</small></div>
+        <div class="conf-sub">${badge}
+          ${l.skuAlvo ? `<button type="button" class="conf-toggle" data-t="${idx}">${l.criarNovo ? "casar" : "criar novo"}</button>` : ""}
+        </div>
+      </div>
+      <div class="conf-qtd"><small>adega</small><input type="number" min="0" step="1" value="${l.quantAtual}" data-q="${idx}" /></div>`;
+    cont.appendChild(div);
+  });
+  cont.querySelectorAll("input[data-i]").forEach((c) => c.addEventListener("change", (e) => {
+    confPlano.linhas[+e.target.dataset.i].incluir = e.target.checked; renderConfPlano();
+  }));
+  cont.querySelectorAll("input[data-q]").forEach((c) => c.addEventListener("input", (e) => {
+    confPlano.linhas[+e.target.dataset.q].quantAtual = Number(e.target.value) || 0;
+  }));
+  cont.querySelectorAll("button[data-t]").forEach((b) => b.addEventListener("click", (e) => {
+    const l = confPlano.linhas[+e.target.dataset.t];
+    l.criarNovo = !l.criarNovo;
+    if (l.criarNovo && !l.skuNovo) l.skuNovo = gerarSku(l.nome, new Set(confPlano.linhas.map((x) => x.skuNovo).filter(Boolean)));
+    renderConfPlano();
+  }));
+}
+$("#conf-plano-pdv").addEventListener("change", (e) => { if (confPlano) confPlano.pdv = e.target.value; });
+$("#btn-conf-plano-salvar").addEventListener("click", async () => {
+  const pdv = $("#conf-plano-pdv").value || pdvAtual;
+  const resolvidos = confPlano.linhas.filter((l) => l.incluir).map((l) => ({
+    sku: l.criarNovo || !l.skuAlvo ? l.skuNovo : l.skuAlvo,
+    novo: l.criarNovo || !l.skuAlvo,
+    rotulo: { nome: l.nome, codigo: l.codigo, codigoBarras: l.codigoBarras, categoria: l.categoria, tipo: tipoDoRotulo(l.categoria), precoVenda: l.precoVenda },
+    quantAtual: l.quantAtual, minimo: l.minimo, nivelPar: l.nivelPar,
+  }));
+  if (!resolvidos.length) { toast("Marque ao menos um produto"); return; }
+  await comProgresso(() => aplicarImportPlanograma(pdv, resolvidos));
+  fechar("#modal-conf-plano"); pdvAtual = pdv; await recarregar(); irPara("estoque");
+  toast(`Planograma importado ✓ (${resolvidos.length} produtos)`);
+});
+
+// ---- Conferência das VENDAS (giro do período) ----
+let confVendas = null;
+function abrirConfVendas(itens) {
+  const reservados = new Set();
+  const linhas = itens.map((it) => {
+    const m = casarRotulo(it);
+    return {
+      ...it, incluir: true,
+      criarNovo: !m.item, skuAlvo: m.item ? m.item.sku : "", nomeAlvo: m.item ? m.item.nome : "",
+      forte: m.forte, skuNovo: m.item ? "" : gerarSku(it.nome, reservados),
+    };
+  });
+  confVendas = { pdv: pdvAtual, linhas };
+  $("#conf-vendas-pdv").innerHTML = opcoesPdv(pdvAtual);
+  $("#conf-vendas-inicio").value = isoMenosDias(30);
+  $("#conf-vendas-fim").value = hojeISO();
+  atualizarPeriodoLabel();
+  renderConfVendas();
+  abrir("#modal-conf-vendas");
+}
+// Legenda do período em pt-BR (o seletor nativo pode mostrar em formato americano).
+function atualizarPeriodoLabel() {
+  const i = $("#conf-vendas-inicio").value, f = $("#conf-vendas-fim").value;
+  $("#conf-vendas-periodo").innerHTML = (i && f) ? `📅 Período: <b>${dataBR(i)}</b> até <b>${dataBR(f)}</b>` : "";
+}
+["#conf-vendas-inicio", "#conf-vendas-fim"].forEach((s) => $(s).addEventListener("change", atualizarPeriodoLabel));
+function renderConfVendas() {
+  const linhas = confVendas.linhas;
+  const inc = linhas.filter((l) => l.incluir);
+  const totUn = inc.reduce((s, l) => s + (Number(l.qtd) || 0), 0);
+  const totRs = inc.reduce((s, l) => s + (Number(l.valorVendido) || 0), 0);
+  $("#conf-vendas-resumo").innerHTML = `<b>${inc.length}</b> rótulos · ${totUn} garrafas vendidas · ${brl(totRs)}`;
+  const cont = $("#conf-vendas-lista");
+  cont.innerHTML = "";
+  const pdv = $("#conf-vendas-pdv").value || confVendas.pdv;
+  linhas.forEach((l, idx) => {
+    const casou = !l.criarNovo && l.skuAlvo;
+    const naAdega = casou ? qtdNoPdv(l.skuAlvo, pdv) : 0;
+    const ficará = Math.max(0, naAdega - (Number(l.qtd) || 0));
+    const badge = casou
+      ? `<span class="conf-badge ${l.forte ? "ok" : "fraco"}">→ ${escaparHtml(l.nomeAlvo)}${l.forte ? "" : " ?"}</span>`
+      : `<span class="conf-badge novo">＋ novo rótulo</span>`;
+    const descHtml = casou ? `<span class="conf-desc">adega ${naAdega} → <b>${ficará}</b></span>` : "";
+    const div = el("div", "conf-linha" + (l.incluir ? "" : " off"));
+    div.innerHTML = `
+      <label class="conf-ck"><input type="checkbox" ${l.incluir ? "checked" : ""} data-i="${idx}" /></label>
+      <div class="conf-corpo">
+        <div class="conf-nome">${escaparHtml(l.nome)} <small class="conf-cat">${Number(l.qtd) || 0} un. · ${brl(l.valorVendido)}</small></div>
+        <div class="conf-sub">${badge}
+          ${l.skuAlvo ? `<button type="button" class="conf-toggle" data-t="${idx}">${l.criarNovo ? "casar" : "criar novo"}</button>` : ""}
+          ${descHtml}
+        </div>
+      </div>`;
+    cont.appendChild(div);
+  });
+  cont.querySelectorAll("input[data-i]").forEach((c) => c.addEventListener("change", (e) => {
+    confVendas.linhas[+e.target.dataset.i].incluir = e.target.checked; renderConfVendas();
+  }));
+  cont.querySelectorAll("button[data-t]").forEach((b) => b.addEventListener("click", (e) => {
+    const l = confVendas.linhas[+e.target.dataset.t];
+    l.criarNovo = !l.criarNovo;
+    if (l.criarNovo && !l.skuNovo) l.skuNovo = gerarSku(l.nome, new Set(confVendas.linhas.map((x) => x.skuNovo).filter(Boolean)));
+    renderConfVendas();
+  }));
+}
+$("#conf-vendas-pdv").addEventListener("change", (e) => { if (confVendas) { confVendas.pdv = e.target.value; renderConfVendas(); } });
+$("#btn-conf-vendas-salvar").addEventListener("click", async () => {
+  const pdv = $("#conf-vendas-pdv").value || pdvAtual;
+  const periodo = { inicio: $("#conf-vendas-inicio").value || isoMenosDias(30), fim: $("#conf-vendas-fim").value || hojeISO() };
+  const resolvidos = confVendas.linhas.filter((l) => l.incluir).map((l) => ({
+    sku: l.criarNovo || !l.skuAlvo ? l.skuNovo : l.skuAlvo,
+    novo: l.criarNovo || !l.skuAlvo,
+    rotulo: { nome: l.nome, codigo: l.codigo, categoria: l.categoria, tipo: tipoDoRotulo(l.categoria), precoVenda: l.precoMedio },
+    codigo: l.codigo, categoria: l.categoria,
+    qtd: l.qtd, precoMedio: l.precoMedio, valorVendido: l.valorVendido,
+  }));
+  if (!resolvidos.length) { toast("Marque ao menos um rótulo"); return; }
+  await comProgresso(() => aplicarImportVendas(periodo, pdv, resolvidos));
+  fechar("#modal-conf-vendas"); pdvAtual = pdv; await recarregar(); irPara("giro");
+  toast(`Vendas importadas ✓ (${resolvidos.length} rótulos)`);
+});
+
+// ======================================================================
+//  MODAL — ABASTECER ADEGA (retaguarda → PDV)
+// ======================================================================
+function abrirModalAbastecer(item) {
+  const f = $("#form-abastecer");
+  f.reset();
+  f.sku.value = item.sku;
+  $("#abastecer-nome").textContent = item.nome || "(sem nome)";
+  $("#abastecer-pdv").innerHTML = opcoesPdv(pdvAtual);
+  const retag = Number(item.qtd) || 0;
+  f.qtd.max = retag;
+  f.qtd.value = Math.min(retag, Number(item.__nivelSugerido) || retag) || retag;
+  $("#abastecer-disp").textContent = `Retaguarda disponível: ${retag}`;
+  abrir("#modal-abastecer");
+}
+$("#form-abastecer").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const sku = f.sku.value, pdv = f.pdv.value || pdvAtual, qtd = Number(f.qtd.value) || 0;
+  const item = DADOS.estoque.find((x) => x.sku === sku);
+  const retag = item ? (Number(item.qtd) || 0) : 0;
+  if (qtd <= 0) { toast("Informe quantas garrafas"); return; }
+  if (qtd > retag) { toast("Você não tem tudo isso na retaguarda"); return; }
+  await comProgresso(() => abastecerPdv(sku, pdv, qtd));
+  fechar("#modal-abastecer"); pdvAtual = pdv; await recarregar();
+  toast(`${qtd} ${qtd === 1 ? "garrafa" : "garrafas"} na adega ✓`);
+});
+
+// ======================================================================
+//  RENDER — GIRO (o que saiu, por período importado)
+// ======================================================================
+function periodosVendas() {
+  // Agrupa por (pdv|inicio|fim); devolve as chaves ordenadas do mais recente ao mais antigo.
+  const mapa = {};
+  (DADOS.vendas || []).forEach((v) => {
+    const k = `${v.pdv}||${v.periodoInicio}||${v.periodoFim}`;
+    (mapa[k] = mapa[k] || []).push(v);
+  });
+  return Object.keys(mapa).map((k) => {
+    const [pdv, inicio, fim] = k.split("||");
+    return { chave: k, pdv, inicio, fim, linhas: mapa[k] };
+  }).sort((a, b) => String(b.fim).localeCompare(String(a.fim)));
+}
+let giroPeriodo = null; // chave do período selecionado
+function renderGiro() {
+  const periodos = periodosVendas();
+  const sel = $("#giro-periodo");
+  const vazio = $("#vazio-giro");
+  const btnEx = $("#btn-excluir-periodo");
+  if (!periodos.length) {
+    vazio.classList.remove("hidden");
+    $("#giro-painel").innerHTML = ""; $("#giro-lista").innerHTML = "";
+    if (sel) sel.innerHTML = "";
+    if (btnEx) btnEx.classList.add("hidden");
+    return;
+  }
+  vazio.classList.add("hidden");
+  if (!giroPeriodo || !periodos.some((p) => p.chave === giroPeriodo)) giroPeriodo = periodos[0].chave;
+  sel.innerHTML = periodos.map((p) => `<option value="${escaparAttr(p.chave)}" ${p.chave === giroPeriodo ? "selected" : ""}>${escaparHtml(p.pdv)} · ${dataBR(p.inicio)}–${dataBR(p.fim)}</option>`).join("");
+  const per = periodos.find((p) => p.chave === giroPeriodo);
+  if (btnEx) {
+    btnEx.classList.remove("hidden");
+    btnEx.onclick = async () => {
+      const n = per.linhas.length;
+      if (!confirm(`Excluir as ${n} ${n === 1 ? "venda" : "vendas"} deste período?\n(${escaparHtml(per.pdv)} · ${dataBR(per.inicio)}–${dataBR(per.fim)})\n\nAs garrafas voltam para a adega.`)) return;
+      await comProgresso(() => excluirVendasPeriodo(per.pdv, per.inicio, per.fim));
+      giroPeriodo = null; await recarregar(); toast("Período de vendas excluído");
+    };
+  }
+  const linhas = per.linhas.slice().sort((a, b) => (Number(b.qtd) || 0) - (Number(a.qtd) || 0));
+  const totUn = linhas.reduce((s, l) => s + (Number(l.qtd) || 0), 0);
+  const totRs = linhas.reduce((s, l) => s + (Number(l.valorVendido) || 0), 0);
+  // Lucro estimado: (preço médio de venda − custo de aquisição) × qtd, quando sabemos o custo.
+  let lucro = 0, temCusto = false;
+  linhas.forEach((l) => {
+    const it = DADOS.estoque.find((x) => x.sku === l.sku);
+    const custo = it ? (Number(it.precoAquisicao) || 0) : 0;
+    if (custo > 0) { temCusto = true; lucro += ((Number(l.precoMedio) || 0) - custo) * (Number(l.qtd) || 0); }
+  });
+  $("#giro-painel").innerHTML = `
+    <div class="resumo-caixa"><span class="num">${totUn}</span><span class="rot">vendidas</span></div>
+    <div class="resumo-caixa"><span class="num">${brl(totRs)}</span><span class="rot">faturamento</span></div>
+    <div class="resumo-caixa ${temCusto ? "" : "vazia"}"><span class="num">${temCusto ? brl(lucro) : "—"}</span><span class="rot">lucro estim.</span></div>`;
+  const cont = $("#giro-lista");
+  cont.innerHTML = "";
+  linhas.forEach((l) => {
+    const it = DADOS.estoque.find((x) => x.sku === l.sku);
+    const naAdega = it ? qtdNoPdv(l.sku, per.pdv) : 0;
+    const custo = it ? (Number(it.precoAquisicao) || 0) : 0;
+    const margem = custo > 0 ? (Number(l.precoMedio) || 0) - custo : null;
+    const card = el("div", "giro-item");
+    card.innerHTML = `
+      <div class="giro-info">
+        <div class="giro-nome">${escaparHtml(it ? it.nome : l.descricao)}</div>
+        <div class="giro-meta">
+          <span>Médio: <b>${brl(l.precoMedio)}</b></span>
+          ${margem != null ? `<span class="${margem >= 0 ? "lucro" : "prejuizo"}">Margem: <b>${brl(margem)}</b></span>` : ""}
+          <span>Na adega: <b>${naAdega}</b></span>
+        </div>
+      </div>
+      <div class="giro-qtd"><span class="giro-num">${Number(l.qtd) || 0}</span><small>vendidas</small></div>
+      <button class="giro-x" aria-label="Excluir esta venda" title="Excluir esta venda">✕</button>`;
+    card.querySelector(".giro-x").addEventListener("click", async () => {
+      const q = Number(l.qtd) || 0;
+      if (!confirm(`Excluir esta venda de "${it ? it.nome : l.descricao}"?\n${q} ${q === 1 ? "garrafa volta" : "garrafas voltam"} para a adega.`)) return;
+      await comProgresso(() => excluirVenda(l));
+      await recarregar(); toast("Venda excluída");
+    });
+    cont.appendChild(card);
+  });
+}
+$("#giro-periodo") && $("#giro-periodo").addEventListener("change", (e) => { giroPeriodo = e.target.value; renderGiro(); });
+
+// ======================================================================
 //  MODAL — CONEXÃO (link + senha da planilha, guardado só neste aparelho)
 // ======================================================================
 $("#btn-config").addEventListener("click", () => {
@@ -745,6 +1258,7 @@ function irPara(aba) {
   if (aba === "estoque") renderEstoque();
   else if (aba === "compras") renderCompras();
   else if (aba === "ofertas") renderOfertas();
+  else if (aba === "giro") renderGiro();
   window.scrollTo(0, 0);
 }
 $$(".nav-btn[data-aba]").forEach((b) => b.addEventListener("click", () => irPara(b.dataset.aba)));
@@ -807,6 +1321,7 @@ async function recarregar() {
   const aba = btn ? btn.dataset.aba : "estoque";
   if (aba === "compras") renderCompras();
   else if (aba === "ofertas") renderOfertas();
+  else if (aba === "giro") renderGiro();
   else renderEstoque();
   atualizarDatalists();
 }
@@ -820,7 +1335,8 @@ function escaparAttr(s) { return escaparHtml(s).replace(/"/g, "&quot;"); }
 // ======================================================================
 function SEED() {
   // Sem vinhos de exemplo — o app começa vazio para você cadastrar os seus.
-  return { fornecedores: [], vigiados: [], precos: [], compras: [], estoque: [] };
+  return { fornecedores: [], vigiados: [], precos: [], compras: [], estoque: [], lojas: [],
+    pdvs: [{ nome: "Ecopark", ativo: "sim" }], pdvEstoque: [], vendas: [] };
 }
 
 // ======================================================================

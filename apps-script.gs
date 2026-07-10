@@ -26,13 +26,21 @@ var ABA_COMPRAS = "Compras";
 var ABA_FORNECEDORES = "Fornecedores";
 var ABA_PRECOS = "Precos";       // Fase 3B: histórico do menor preço público achado por vinho
 var ABA_LOJAS = "Lojas";         // Fase 3B: lojas de confiança extras (além do Buscapé)
+var ABA_PDVS = "Pdvs";           // Fase 4: pontos de venda (adegas)
+var ABA_PDV_ESTOQUE = "PdvEstoque"; // Fase 4: quantidade de cada rótulo em cada adega
+var ABA_VENDAS = "Vendas";       // Fase 4: histórico de vendas por período (giro)
 
-// Colunas de cada aba (a ORDEM tem que bater com a 1ª linha da planilha).
-var COL_ESTOQUE = ["sku","nome","tipo","uva","produtor","qtd","minimo","precoAquisicao","fornecedor","dataCompra","obs"];
+// Colunas de cada aba. As colunas novas da Fase 4 (codigo, codigoBarras, categoria,
+// precoVenda) ficam NO FIM da lista do estoque — assim o "auto-heal" só as ACRESCENTA
+// à planilha antiga, sem bagunçar a ordem das colunas que já existiam.
+var COL_ESTOQUE = ["sku","nome","tipo","uva","produtor","qtd","minimo","precoAquisicao","fornecedor","dataCompra","obs","codigo","codigoBarras","categoria","precoVenda"];
 var COL_COMPRAS = ["data","nome","qtd","precoUnit","fornecedor","notaChave"];
 var COL_FORNECEDORES = ["nome","contato","obs"];
 var COL_PRECOS = ["data","consulta","achado","preco","url","site"];
 var COL_LOJAS = ["nome","url","ativo"];
+var COL_PDVS = ["nome","ativo","obs"];
+var COL_PDV_ESTOQUE = ["pdv","sku","qtd","minimo","nivelPar"];
+var COL_VENDAS = ["periodoInicio","periodoFim","importadoEm","pdv","sku","codigo","descricao","categoria","qtd","precoMedio","valorVendido"];
 
 // ---------------------------------------------------------------- utilidades
 function _prop(nome) { return PropertiesService.getScriptProperties().getProperty(nome) || ""; }
@@ -46,7 +54,15 @@ function _checaToken(token) {
 function _aba(nome, colunas) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sh = ss.getSheetByName(nome);
-  if (!sh) { sh = ss.insertSheet(nome); sh.appendRow(colunas); }
+  if (!sh) { sh = ss.insertSheet(nome); sh.appendRow(colunas); return sh; }
+  // Auto-heal: garante que o cabeçalho tenha TODAS as colunas esperadas. Colunas
+  // que faltam (ex.: novas da Fase 4) são acrescentadas ao FIM, sem apagar dados.
+  if (colunas && colunas.length) {
+    var lastCol = sh.getLastColumn();
+    var header = lastCol ? sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (c) { return String(c).trim(); }) : [];
+    var faltando = colunas.filter(function (c) { return header.indexOf(c) < 0; });
+    if (faltando.length) sh.getRange(1, header.length + 1, 1, faltando.length).setValues([faltando]);
+  }
   return sh;
 }
 function _num(x) { var n = parseFloat(String(x).replace(",", ".")); return isNaN(n) ? 0 : n; }
@@ -86,7 +102,7 @@ function doGet(e) {
   try {
     _checaToken(e && e.parameter ? e.parameter.token : "");
     var estoque = _lerAba(ABA_ESTOQUE, COL_ESTOQUE).map(function (r) {
-      r.qtd = _num(r.qtd); r.minimo = _num(r.minimo); r.precoAquisicao = _num(r.precoAquisicao);
+      r.qtd = _num(r.qtd); r.minimo = _num(r.minimo); r.precoAquisicao = _num(r.precoAquisicao); r.precoVenda = _num(r.precoVenda);
       if (r.dataCompra instanceof Date) r.dataCompra = Utilities.formatDate(r.dataCompra, "GMT", "yyyy-MM-dd");
       return r;
     });
@@ -102,7 +118,19 @@ function doGet(e) {
       return r;
     });
     var lojas = _lerAba(ABA_LOJAS, COL_LOJAS);
-    return _json({ estoque: estoque, compras: compras, fornecedores: fornecedores, precos: precos, lojas: lojas });
+    var pdvs = _lerAba(ABA_PDVS, COL_PDVS);
+    var pdvEstoque = _lerAba(ABA_PDV_ESTOQUE, COL_PDV_ESTOQUE).map(function (r) {
+      r.qtd = _num(r.qtd); r.minimo = _num(r.minimo); r.nivelPar = _num(r.nivelPar); return r;
+    });
+    var vendas = _lerAba(ABA_VENDAS, COL_VENDAS).map(function (r) {
+      r.qtd = _num(r.qtd); r.precoMedio = _num(r.precoMedio); r.valorVendido = _num(r.valorVendido);
+      ["periodoInicio", "periodoFim", "importadoEm"].forEach(function (k) {
+        if (r[k] instanceof Date) r[k] = Utilities.formatDate(r[k], "GMT", "yyyy-MM-dd");
+      });
+      return r;
+    });
+    return _json({ estoque: estoque, compras: compras, fornecedores: fornecedores, precos: precos, lojas: lojas,
+      pdvs: pdvs, pdvEstoque: pdvEstoque, vendas: vendas });
   } catch (err) {
     return _json({ erro: String(err.message || err) });
   }
@@ -123,6 +151,12 @@ function doPost(e) {
       case "varrerAgora":      r = varrerPrecosPublicos(false); break;
       case "salvarLoja":       r = salvarLoja(body.loja, body.urlOriginal); break;
       case "excluirLoja":      r = excluirLoja(body.url); break;
+      case "abastecerPdv":     r = abastecerPdv(body.sku, body.pdv, body.qtd); break;
+      case "ajustarPdv":       r = ajustarPdv(body.sku, body.pdv, body.qtd); break;
+      case "importarPlanograma": r = importarPlanograma(body.pdv, body.itens); break;
+      case "importarVendas":   r = importarVendas(body.periodoInicio, body.periodoFim, body.pdv, body.itens); break;
+      case "excluirVenda":     r = excluirVenda(body.venda); break;
+      case "excluirVendasPeriodo": r = excluirVendasPeriodo(body.pdv, body.periodoInicio, body.periodoFim); break;
       default: throw new Error("Ação desconhecida: " + body.action);
     }
     return _json(r || { ok: true });
@@ -208,6 +242,199 @@ function _garanteFornecedor(nome) {
 
 function _slug(s) {
   return String(s || "item").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "item";
+}
+
+/**
+ * ==========================================================================
+ *  FASE 4 — Estoque (retaguarda) ↔ PDV (adega) + importação de planilhas
+ * ==========================================================================
+ *  Cada RÓTULO tem uma quantidade de RETAGUARDA (coluna `qtd` da aba Estoque) e
+ *  uma quantidade EM CADA ADEGA (aba PdvEstoque, uma linha por pdv+sku). Os
+ *  movimentos: comprar soma na retaguarda; abastecer tira da retaguarda e põe na
+ *  adega; vender (importar) desconta da adega; importar planograma acerta a adega
+ *  com a posição real do sistema.
+ */
+
+// Garante que uma adega (PDV) exista na aba Pdvs.
+function _garantePdv(nome) {
+  nome = (nome || "").toString().trim(); if (!nome) return;
+  var sh = _aba(ABA_PDVS, COL_PDVS);
+  var lista = _lerAba(ABA_PDVS, COL_PDVS);
+  if (!lista.some(function (p) { return String(p.nome).trim() === nome; })) sh.appendRow([nome, "sim", ""]);
+}
+
+// Acha a linha (na planilha) de um rótulo numa adega, por pdv+sku.
+function _acharLinhaPdv(sh, pdv, sku) {
+  var cP = COL_PDV_ESTOQUE.indexOf("pdv"), cS = COL_PDV_ESTOQUE.indexOf("sku");
+  var n = sh.getLastRow() - 1; if (n < 1) return -1;
+  var vals = sh.getRange(2, 1, n, COL_PDV_ESTOQUE.length).getValues();
+  for (var i = 0; i < vals.length; i++)
+    if (String(vals[i][cP]) === String(pdv) && String(vals[i][cS]) === String(sku)) return i + 2;
+  return -1;
+}
+function _qtdPdv(pdv, sku) {
+  var sh = _aba(ABA_PDV_ESTOQUE, COL_PDV_ESTOQUE);
+  var linha = _acharLinhaPdv(sh, pdv, sku);
+  if (linha < 0) return 0;
+  return _num(sh.getRange(linha, COL_PDV_ESTOQUE.indexOf("qtd") + 1).getValue());
+}
+// Cria/atualiza a linha de PDV de um rótulo (campos = objeto com o que mudar).
+function _setPdvEstoque(pdv, sku, campos) {
+  var sh = _aba(ABA_PDV_ESTOQUE, COL_PDV_ESTOQUE);
+  var linha = _acharLinhaPdv(sh, pdv, sku);
+  var obj;
+  if (linha > 0) {
+    var atual = sh.getRange(linha, 1, 1, COL_PDV_ESTOQUE.length).getValues()[0];
+    obj = {}; for (var i = 0; i < COL_PDV_ESTOQUE.length; i++) obj[COL_PDV_ESTOQUE[i]] = atual[i];
+  } else { obj = { pdv: pdv, sku: sku, qtd: 0, minimo: 0, nivelPar: 0 }; }
+  for (var k in campos) obj[k] = campos[k];
+  if (linha > 0) sh.getRange(linha, 1, 1, COL_PDV_ESTOQUE.length).setValues([_objParaLinha(obj, COL_PDV_ESTOQUE)]);
+  else sh.appendRow(_objParaLinha(obj, COL_PDV_ESTOQUE));
+  return obj;
+}
+// Reescreve as linhas de dados de uma aba a partir de uma lista de objetos.
+function _regravaAba(sh, colunas, objs) {
+  var linhas = objs.map(function (o) { return _objParaLinha(o, colunas); });
+  var lastRow = sh.getLastRow();
+  if (lastRow > 1) sh.getRange(2, 1, lastRow - 1, colunas.length).clearContent();
+  if (linhas.length) sh.getRange(2, 1, linhas.length, colunas.length).setValues(linhas);
+}
+
+// Abastecer: tira `qtd` da retaguarda do rótulo e soma na adega.
+function abastecerPdv(sku, pdv, qtd) {
+  qtd = _num(qtd); if (qtd <= 0) return { ok: true };
+  _garantePdv(pdv);
+  var shE = _aba(ABA_ESTOQUE, COL_ESTOQUE);
+  var linhaE = _acharLinha(shE, sku);
+  if (linhaE > 0) {
+    var qCol = COL_ESTOQUE.indexOf("qtd") + 1;
+    var atual = _num(shE.getRange(linhaE, qCol).getValue());
+    shE.getRange(linhaE, qCol).setValue(Math.max(0, atual - qtd));
+  }
+  _setPdvEstoque(pdv, sku, { qtd: _qtdPdv(pdv, sku) + qtd });
+  return { ok: true };
+}
+
+// Ajuste direto da quantidade na adega (valor absoluto).
+function ajustarPdv(sku, pdv, qtd) {
+  _garantePdv(pdv);
+  _setPdvEstoque(pdv, sku, { qtd: Math.max(0, _num(qtd)) });
+  return { ok: true };
+}
+
+// Importar planograma: acerta a adega com a posição do sistema + cadastra rótulos
+// novos. itens = [{ sku, novo, rotulo:{...}, quantAtual, minimo, nivelPar }].
+function importarPlanograma(pdv, itens) {
+  itens = itens || []; _garantePdv(pdv);
+  var shE = _aba(ABA_ESTOQUE, COL_ESTOQUE);
+  var shP = _aba(ABA_PDV_ESTOQUE, COL_PDV_ESTOQUE);
+  var est = _lerAba(ABA_ESTOQUE, COL_ESTOQUE);
+  var pdvRows = _lerAba(ABA_PDV_ESTOQUE, COL_PDV_ESTOQUE);
+  var mapE = {}; est.forEach(function (r) { mapE[r.sku] = r; });
+  var mapP = {}; pdvRows.forEach(function (r) { mapP[r.pdv + "||" + r.sku] = r; });
+  itens.forEach(function (it) {
+    var sku = it.sku, d = it.rotulo || {};
+    var e = mapE[sku];
+    if (!e) {
+      e = { sku: sku, nome: d.nome || "", tipo: d.tipo || "Tinto", uva: "", produtor: "", qtd: 0, minimo: 0,
+        precoAquisicao: 0, fornecedor: "", dataCompra: "", obs: "", codigo: d.codigo || "", codigoBarras: d.codigoBarras || "",
+        categoria: d.categoria || "", precoVenda: _num(d.precoVenda) };
+      mapE[sku] = e; est.push(e);
+    } else {
+      if (d.nome) e.nome = d.nome; if (d.codigo) e.codigo = d.codigo; if (d.codigoBarras) e.codigoBarras = d.codigoBarras;
+      if (d.categoria) e.categoria = d.categoria; if (d.tipo) e.tipo = d.tipo; if (d.precoVenda) e.precoVenda = _num(d.precoVenda);
+    }
+    var key = pdv + "||" + sku, p = mapP[key];
+    if (!p) { p = { pdv: pdv, sku: sku, qtd: 0, minimo: 0, nivelPar: 0 }; mapP[key] = p; pdvRows.push(p); }
+    p.qtd = _num(it.quantAtual);
+    if (it.minimo != null) p.minimo = _num(it.minimo);
+    if (it.nivelPar != null) p.nivelPar = _num(it.nivelPar);
+  });
+  _regravaAba(shE, COL_ESTOQUE, est);
+  _regravaAba(shP, COL_PDV_ESTOQUE, pdvRows);
+  return { ok: true, rotulos: itens.length };
+}
+
+// Importar vendas: grava o histórico do período e desconta da adega. itens =
+// [{ sku, novo, rotulo:{...}, codigo, categoria, qtd, precoMedio, valorVendido }].
+function importarVendas(periodoInicio, periodoFim, pdv, itens) {
+  itens = itens || []; _garantePdv(pdv);
+  var shE = _aba(ABA_ESTOQUE, COL_ESTOQUE);
+  var shP = _aba(ABA_PDV_ESTOQUE, COL_PDV_ESTOQUE);
+  var shV = _aba(ABA_VENDAS, COL_VENDAS);
+  var hoje = Utilities.formatDate(new Date(), "GMT-3", "yyyy-MM-dd");
+  var est = _lerAba(ABA_ESTOQUE, COL_ESTOQUE);
+  var pdvRows = _lerAba(ABA_PDV_ESTOQUE, COL_PDV_ESTOQUE);
+  var mapE = {}; est.forEach(function (r) { mapE[r.sku] = r; });
+  var mapP = {}; pdvRows.forEach(function (r) { mapP[r.pdv + "||" + r.sku] = r; });
+  var vendasRows = [];
+  itens.forEach(function (it) {
+    var sku = it.sku, d = it.rotulo || {};
+    if (!mapE[sku] && it.novo) {
+      var e = { sku: sku, nome: d.nome || "", tipo: d.tipo || "Tinto", uva: "", produtor: "", qtd: 0, minimo: 0,
+        precoAquisicao: 0, fornecedor: "", dataCompra: "", obs: "", codigo: d.codigo || it.codigo || "", codigoBarras: "",
+        categoria: d.categoria || it.categoria || "", precoVenda: _num(d.precoVenda) };
+      mapE[sku] = e; est.push(e);
+    }
+    vendasRows.push({ periodoInicio: periodoInicio, periodoFim: periodoFim, importadoEm: hoje, pdv: pdv, sku: sku,
+      codigo: it.codigo || "", descricao: d.nome || "", categoria: it.categoria || "",
+      qtd: _num(it.qtd), precoMedio: _num(it.precoMedio), valorVendido: _num(it.valorVendido) });
+    if (mapE[sku]) {
+      var key = pdv + "||" + sku, p = mapP[key];
+      if (!p) { p = { pdv: pdv, sku: sku, qtd: 0, minimo: 0, nivelPar: 0 }; mapP[key] = p; pdvRows.push(p); }
+      p.qtd = Math.max(0, _num(p.qtd) - _num(it.qtd));
+    }
+  });
+  _regravaAba(shE, COL_ESTOQUE, est);
+  _regravaAba(shP, COL_PDV_ESTOQUE, pdvRows);
+  if (vendasRows.length) {
+    var start = shV.getLastRow() + 1;
+    sh_setBloco(shV, start, vendasRows, COL_VENDAS);
+  }
+  return { ok: true, rotulos: itens.length };
+}
+function sh_setBloco(sh, start, objs, colunas) {
+  sh.getRange(start, 1, objs.length, colunas.length).setValues(objs.map(function (o) { return _objParaLinha(o, colunas); }));
+}
+
+// Data como texto yyyy-MM-dd (a planilha às vezes guarda datas como objeto Date).
+function _fmtData(x) { return (x instanceof Date) ? Utilities.formatDate(x, "GMT", "yyyy-MM-dd") : String(x || ""); }
+
+// Exclui todas as vendas de um período e DEVOLVE as garrafas à adega.
+function excluirVendasPeriodo(pdv, inicio, fim) {
+  var sh = _aba(ABA_VENDAS, COL_VENDAS);
+  var vendas = _lerAba(ABA_VENDAS, COL_VENDAS);
+  var manter = [], remover = [];
+  vendas.forEach(function (v) {
+    if (String(v.pdv) === String(pdv) && _fmtData(v.periodoInicio) === String(inicio) && _fmtData(v.periodoFim) === String(fim)) remover.push(v);
+    else manter.push(v);
+  });
+  remover.forEach(function (v) { if (v.sku) _setPdvEstoque(v.pdv, v.sku, { qtd: _qtdPdv(v.pdv, v.sku) + _num(v.qtd) }); });
+  _regravaAba(sh, COL_VENDAS, manter);
+  return { ok: true, removidas: remover.length };
+}
+
+// Exclui UMA venda (a 1ª que casar) e devolve a garrafa à adega.
+function excluirVenda(venda) {
+  if (!venda) return { ok: true };
+  var sh = _aba(ABA_VENDAS, COL_VENDAS);
+  var vendas = _lerAba(ABA_VENDAS, COL_VENDAS);
+  var removida = null, manter = [];
+  for (var i = 0; i < vendas.length; i++) {
+    if (!removida && _mesmaVenda(vendas[i], venda)) { removida = vendas[i]; continue; }
+    manter.push(vendas[i]);
+  }
+  if (removida) {
+    if (removida.sku) _setPdvEstoque(removida.pdv, removida.sku, { qtd: _qtdPdv(removida.pdv, removida.sku) + _num(removida.qtd) });
+    _regravaAba(sh, COL_VENDAS, manter);
+  }
+  return { ok: true, removidas: removida ? 1 : 0 };
+}
+function _mesmaVenda(a, b) {
+  return String(a.pdv) === String(b.pdv) && String(a.sku) === String(b.sku) &&
+    _fmtData(a.periodoInicio) === _fmtData(b.periodoInicio) && _fmtData(a.periodoFim) === _fmtData(b.periodoFim) &&
+    _fmtData(a.importadoEm) === _fmtData(b.importadoEm) &&
+    _num(a.qtd) === _num(b.qtd) && _num(a.valorVendido) === _num(b.valorVendido);
 }
 
 /**
