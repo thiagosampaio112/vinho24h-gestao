@@ -162,6 +162,7 @@ function doPost(e) {
       case "excluirVendasPeriodo": r = excluirVendasPeriodo(body.pdv, body.periodoInicio, body.periodoFim); break;
       case "salvarVinhoGuia":  r = salvarVinhoGuia(body.vinho, body.idOriginal, body.guiaId, body.guiaGid); break;
       case "excluirVinhoGuia": r = excluirVinhoGuia(body.id, body.guiaId, body.guiaGid); break;
+      case "salvarFotoGuia":   r = salvarFotoGuia(body.id, body.base64); break;
       default: throw new Error("Ação desconhecida: " + body.action);
     }
     return _json(r || { ok: true });
@@ -536,6 +537,35 @@ function excluirVinhoGuia(vinhoId, id, gid) {
   var linha = _acharLinhaCol(sh, idCol + 1, vinhoId);
   if (linha > 0) sh.deleteRow(linha);
   return { ok: true };
+}
+
+/**
+ * Sobe a foto (PNG em base64) para o repositório do guia via API do GitHub.
+ * O guia (GitHub Pages) passa a servir o arquivo em fotos/<id>.png.
+ * Propriedades do script necessárias:
+ *   GITHUB_TOKEN = token do GitHub com permissão de escrever no repo do guia
+ *   GUIA_REPO    = "usuario/repo" do guia (ex.: thiagosampaio112/vinho24h)
+ *   GUIA_BRANCH  = (opcional) branch; vazio = "main"
+ */
+function salvarFotoGuia(id, base64) {
+  var token = _prop("GITHUB_TOKEN");
+  var repo = _prop("GUIA_REPO");
+  if (!token || !repo) throw new Error("Faltam GITHUB_TOKEN / GUIA_REPO nas propriedades do script.");
+  if (!id || !base64) throw new Error("Foto inválida.");
+  var branch = _prop("GUIA_BRANCH") || "main";
+  var caminho = "fotos/" + _slug(id) + ".png";
+  var base = "https://api.github.com/repos/" + repo + "/contents/" + caminho;
+  var headers = { "Authorization": "token " + token, "Accept": "application/vnd.github+json", "User-Agent": "vinho24h-gestao" };
+  // Se o arquivo já existe, precisa do SHA atual para sobrescrever.
+  var sha = null;
+  var g = UrlFetchApp.fetch(base + "?ref=" + encodeURIComponent(branch), { method: "get", headers: headers, muteHttpExceptions: true });
+  if (g.getResponseCode() === 200) { try { sha = JSON.parse(g.getContentText()).sha; } catch (e) {} }
+  var payload = { message: "guia: foto " + caminho, content: base64, branch: branch };
+  if (sha) payload.sha = sha;
+  var r = UrlFetchApp.fetch(base, { method: "put", headers: headers, contentType: "application/json", payload: JSON.stringify(payload), muteHttpExceptions: true });
+  var code = r.getResponseCode();
+  if (code >= 300) throw new Error("GitHub " + code + ": " + r.getContentText().slice(0, 180));
+  return { ok: true, path: caminho };
 }
 
 /**

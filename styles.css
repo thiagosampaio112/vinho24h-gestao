@@ -518,3 +518,12 @@ body {
 .guia-escala input[type="range"] { width: 100%; accent-color: var(--dourado); }
 .guia-check { flex-direction: row !important; align-items: center; gap: 8px !important; color: var(--texto) !important; }
 .guia-check input { width: 20px; height: 20px; accent-color: var(--dourado); }
+
+/* Área de foto (IA) na ficha do guia */
+.guia-foto-box { display: flex; gap: 12px; align-items: flex-start; background: var(--card); border: 1px solid var(--card-borda); border-radius: 12px; padding: 10px; }
+.guia-foto-thumb { width: 70px; height: 94px; flex: 0 0 auto; border-radius: 8px; background: var(--bordo); display: flex; align-items: center; justify-content: center; font-size: 26px; overflow: hidden; }
+.guia-foto-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.guia-foto-ctrl { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.guia-foto-ctrl .btn-secundario { padding: 10px 12px; font-size: 14px; }
+.guia-foto-aprovar { display: flex; gap: 8px; }
+.guia-foto-aprovar button { flex: 1; padding: 9px 10px; font-size: 14px; }

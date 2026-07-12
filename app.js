@@ -1406,12 +1406,17 @@ function abrirModalGuia(v) {
   $("#modal-guia-titulo").textContent = editando ? "Editar vinho do guia" : "Novo vinho no guia";
   $("#btn-excluir-guia").classList.toggle("hidden", !editando);
   f.id_original.value = editando ? (v.id || "") : "";
+  if (f.id) f.id.value = editando ? (v.id || "") : "";
   const camposTexto = ["nome", "codigo", "produtor", "uva", "pais", "regiao", "safra", "alcool", "temperatura", "harmonizacao", "queijos", "descricao", "combina_se_voce_gosta", "foto", "adegas"];
   camposTexto.forEach((c) => { if (f[c]) f[c].value = editando ? (v[c] != null ? v[c] : "") : ""; });
   f.tipo.value = (editando && v.tipo) ? v.tipo : "Tinto";
   f.gelavel.checked = editando ? (v.gelavel === true || v.gelavel === "sim" || v.gelavel === "SIM") : false;
-  if (!editando) f.adegas.value = (pdvsAtivos()[0] && "ecopark-iv") || "ecopark-iv";
+  if (!editando) f.adegas.value = "ecopark-iv";
   montarEscalasGuia(editando ? v : {});
+  // Foto: mostra a atual (se for dataURL/URL absoluta) e zera o estado de aprovação
+  guiaFotoProcessada = null;
+  $("#guia-foto-aprovar").classList.add("hidden");
+  mostrarThumbGuia(editando && v.foto && /^(data:|https?:)/.test(v.foto) ? v.foto : "");
   atualizarDatalists();
   abrir("#modal-guia");
 }
@@ -1431,7 +1436,7 @@ $("#form-guia").addEventListener("submit", async (e) => {
   const orig = DADOS.guia.find((x) => x.id === f.id_original.value) || {};
   const vinho = {
     ...orig,
-    id: (orig.id || ""), nome: f.nome.value.trim(), codigo: f.codigo.value.trim(), produtor: f.produtor.value.trim(),
+    id: (f.id ? f.id.value.trim() : "") || orig.id || "", nome: f.nome.value.trim(), codigo: f.codigo.value.trim(), produtor: f.produtor.value.trim(),
     tipo: f.tipo.value, uva: f.uva.value.trim(), pais: f.pais.value.trim(), regiao: f.regiao.value.trim(),
     safra: f.safra.value.trim(), alcool: f.alcool.value.trim(),
     docura: Number(f.docura.value) || 0, corpo: Number(f.corpo.value) || 0, taninos: Number(f.taninos.value) || 0, acidez: Number(f.acidez.value) || 0,
@@ -1455,6 +1460,138 @@ $("#btn-excluir-guia").addEventListener("click", async () => {
 $("#busca-guia").addEventListener("input", (e) => { filtroGuia.busca = e.target.value; renderGuia(); });
 $("#btn-novo-guia").addEventListener("click", () => abrirModalGuia(null));
 $("#form-guia").nome.addEventListener("change", vincularCodigoGuia);
+
+// ---- Foto da garrafa: IA isola em fundo transparente + padroniza o tamanho ----
+const MODELO_IMG = "gemini-2.5-flash-image"; // "Nano Banana" — edita imagem
+let guiaFotoProcessada = null; // dataURL da foto pronta, aguardando aprovação
+
+function mostrarThumbGuia(src) {
+  const t = $("#guia-foto-thumb");
+  t.innerHTML = src ? `<img src="${escaparAttr(src)}" alt="" />` : "🍷";
+  t.classList.toggle("vazia", !src);
+}
+
+$("#btn-foto-guia").addEventListener("click", () => {
+  if (!GEMINI_KEY) { toast("Configure a chave da IA na engrenagem ⚙ primeiro"); $("#btn-config").click(); return; }
+  const f = $("#form-guia");
+  if (!f.nome.value.trim()) { toast("Preencha o nome do vinho antes da foto"); f.nome.focus(); return; }
+  $("#input-foto-guia").click();
+});
+
+$("#input-foto-guia").addEventListener("change", async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  try {
+    $("#carregando-msg").textContent = "Deixando a garrafa no padrão (IA)…";
+    abrir("#carregando");
+    const { base64, mime } = await prepararArquivo(file);
+    const editada = await editarFotoGarrafaIA(base64, mime);
+    const padronizada = await padronizarGarrafa("data:" + (editada.mime || "image/png") + ";base64," + editada.base64);
+    fechar("#carregando");
+    guiaFotoProcessada = padronizada;
+    mostrarThumbGuia(padronizada);
+    $("#guia-foto-aprovar").classList.remove("hidden");
+  } catch (err) {
+    fechar("#carregando"); console.error(err);
+    toast("Não consegui processar a foto: " + (err.message || "tente outra"));
+  }
+});
+
+$("#btn-foto-refazer").addEventListener("click", () => $("#input-foto-guia").click());
+
+$("#btn-foto-usar").addEventListener("click", async () => {
+  if (!guiaFotoProcessada) return;
+  const f = $("#form-guia");
+  if (!f.id.value.trim()) f.id.value = gerarIdGuia(f.nome.value);
+  const id = f.id.value.trim();
+  try {
+    const base64 = guiaFotoProcessada.split(",")[1];
+    if (online()) {
+      $("#carregando-msg").textContent = "Enviando a foto para o guia…";
+      abrir("#carregando");
+      const r = await apiPost("salvarFotoGuia", { id, base64 });
+      fechar("#carregando");
+      // caminho relativo no site do guia + quebra de cache
+      f.foto.value = (r && r.path ? r.path : `fotos/${id}.png`) + "?v=" + Date.now();
+    } else {
+      // demo: guarda a própria imagem no campo (sem repositório)
+      f.foto.value = guiaFotoProcessada;
+    }
+    $("#guia-foto-aprovar").classList.add("hidden");
+    guiaFotoProcessada = null;
+    toast("Foto pronta ✓ — salve o vinho para publicar");
+  } catch (err) {
+    fechar("#carregando"); console.error(err);
+    toast("Não consegui enviar a foto: " + (err.message || "tente de novo"));
+  }
+});
+
+// Chama o Gemini de imagem: manda a foto + comando, recebe a imagem editada.
+async function editarFotoGarrafaIA(base64, mime) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODELO_IMG}:generateContent?key=${encodeURIComponent(GEMINI_KEY)}`;
+  const instrucao =
+    "Isole a GARRAFA de vinho desta foto. Remova completamente o fundo, deixando-o TOTALMENTE TRANSPARENTE (sem cor de fundo). " +
+    "Mostre a garrafa inteira, em pé, centralizada, estilo foto de produto de catálogo, iluminação suave e uniforme, sem sombra no chão, sem reflexos exagerados. " +
+    "Mantenha o RÓTULO fiel ao original (não invente texto). Não adicione bordas, texto ou marca d'água. Devolva apenas a imagem (PNG com transparência).";
+  const body = {
+    contents: [{ parts: [{ inline_data: { mime_type: mime, data: base64 } }, { text: instrucao }] }],
+    generationConfig: { responseModalities: ["IMAGE"] },
+  };
+  const resp = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const json = await resp.json();
+  if (json.error) throw new Error(json.error.message || "erro da IA");
+  const parts = (json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts) || [];
+  const imgPart = parts.find((p) => p.inline_data || p.inlineData);
+  const dados = imgPart && (imgPart.inline_data || imgPart.inlineData);
+  if (!dados || !dados.data) throw new Error("a IA não devolveu imagem");
+  return { base64: dados.data, mime: dados.mime_type || dados.mimeType || "image/png" };
+}
+
+// Padroniza: recorta a garrafa, escala para uma altura fixa e centraliza num
+// quadro do mesmo tamanho (fundo transparente) — garante todas do mesmo tamanho.
+function padronizarGarrafa(dataUrl, alvoW = 600, alvoH = 800, alturaAlvo = 740) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const w = img.width, h = img.height;
+      const tc = document.createElement("canvas"); tc.width = w; tc.height = h;
+      const tx = tc.getContext("2d"); tx.drawImage(img, 0, 0);
+      let dados; try { dados = tx.getImageData(0, 0, w, h); } catch (_) { resolve(dataUrl); return; }
+      const px = dados.data;
+      // Tem transparência de verdade? (algum pixel com alpha baixo)
+      let temAlpha = false;
+      for (let i = 3; i < px.length; i += 4) { if (px[i] < 245) { temAlpha = true; break; } }
+      const bg = [px[0], px[1], px[2]]; // cor do canto superior esquerdo (fundo)
+      const tol = 40;
+      let minX = w, minY = h, maxX = -1, maxY = -1;
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = (y * w + x) * 4;
+          let fg;
+          if (temAlpha) { fg = px[i + 3] > 40; }
+          else {
+            const dr = px[i] - bg[0], dg = px[i + 1] - bg[1], db = px[i + 2] - bg[2];
+            fg = Math.sqrt(dr * dr + dg * dg + db * db) > tol;
+            if (!fg) px[i + 3] = 0; // deixa o fundo transparente
+          }
+          if (fg) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+        }
+      }
+      if (!temAlpha) tx.putImageData(dados, 0, 0);
+      if (maxX < minX || maxY < minY) { resolve(dataUrl); return; }
+      const bw = maxX - minX + 1, bh = maxY - minY + 1;
+      const escala = alturaAlvo / bh;
+      const dw = Math.min(alvoW, bw * escala), dh = bh * escala;
+      const out = document.createElement("canvas"); out.width = alvoW; out.height = alvoH;
+      const ox = out.getContext("2d");
+      ox.drawImage(tc, minX, minY, bw, bh, (alvoW - dw) / 2, (alvoH - dh) / 2, dw, dh);
+      resolve(out.toDataURL("image/png"));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
 
 // ======================================================================
 //  MODAL — CONEXÃO (link + senha da planilha, guardado só neste aparelho)

@@ -248,6 +248,7 @@
       </div>
       <form id="form-guia" class="form">
         <input type="hidden" name="id_original" />
+        <input type="hidden" name="id" />
         <label>Nome do vinho <input name="nome" list="lista-vinhos" required placeholder="Ex.: Peccato Cabernet" /></label>
         <div class="form-linha">
           <label>Tipo
@@ -274,6 +275,18 @@
         <label>Queijos <textarea name="queijos" rows="2"></textarea></label>
         <label>Descrição <textarea name="descricao" rows="3" placeholder="Como o cliente vê o vinho"></textarea></label>
         <label>Combina se você gosta… <input name="combina_se_voce_gosta" placeholder="Ex.: de tinto encorpado para churrasco." /></label>
+        <div class="guia-foto-box">
+          <div class="guia-foto-thumb vazia" id="guia-foto-thumb">🍷</div>
+          <div class="guia-foto-ctrl">
+            <button type="button" class="btn-secundario" id="btn-foto-guia">📷 Foto da garrafa (IA)</button>
+            <div class="guia-foto-aprovar hidden" id="guia-foto-aprovar">
+              <button type="button" class="btn-primario" id="btn-foto-usar">✓ Usar</button>
+              <button type="button" class="btn-secundario" id="btn-foto-refazer">↻ Refazer</button>
+            </div>
+            <p class="dica">A IA isola a garrafa em fundo transparente e o app padroniza o tamanho. Você aprova antes de publicar.</p>
+          </div>
+        </div>
+        <input id="input-foto-guia" type="file" accept="image/*" class="hidden" />
         <label>Foto (link) <input name="foto" placeholder="https://… ou fotos/arquivo.png" /></label>
         <label>Adegas onde aparece (slug; separadas por ;) <input name="adegas" placeholder="ecopark-iv" /></label>
         <div class="form-botoes">
