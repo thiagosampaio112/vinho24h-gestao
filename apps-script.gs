@@ -129,8 +129,10 @@ function doGet(e) {
       });
       return r;
     });
+    var guia = [];
+    try { guia = lerGuia().guia; } catch (eg) { guia = []; } // nunca deixa o guia quebrar a carga
     return _json({ estoque: estoque, compras: compras, fornecedores: fornecedores, precos: precos, lojas: lojas,
-      pdvs: pdvs, pdvEstoque: pdvEstoque, vendas: vendas });
+      pdvs: pdvs, pdvEstoque: pdvEstoque, vendas: vendas, guia: guia });
   } catch (err) {
     return _json({ erro: String(err.message || err) });
   }
@@ -157,6 +159,8 @@ function doPost(e) {
       case "importarVendas":   r = importarVendas(body.periodoInicio, body.periodoFim, body.pdv, body.itens); break;
       case "excluirVenda":     r = excluirVenda(body.venda); break;
       case "excluirVendasPeriodo": r = excluirVendasPeriodo(body.pdv, body.periodoInicio, body.periodoFim); break;
+      case "salvarVinhoGuia":  r = salvarVinhoGuia(body.vinho, body.idOriginal); break;
+      case "excluirVinhoGuia": r = excluirVinhoGuia(body.id); break;
       default: throw new Error("Ação desconhecida: " + body.action);
     }
     return _json(r || { ok: true });
@@ -442,6 +446,95 @@ function _mesmaVenda(a, b) {
     _fmtData(a.periodoInicio) === _fmtData(b.periodoInicio) && _fmtData(a.periodoFim) === _fmtData(b.periodoFim) &&
     _fmtData(a.importadoEm) === _fmtData(b.importadoEm) &&
     _num(a.qtd) === _num(b.qtd) && _num(a.valorVendido) === _num(b.valorVendido);
+}
+
+/**
+ * ==========================================================================
+ *  GUIA DO QR — editar (por aqui) a planilha que o guia do cliente lê
+ * ==========================================================================
+ *  O guia (o app que o cliente abre no QR da porta) lê os vinhos de OUTRA
+ *  planilha, publicada em CSV. Este backend abre essa planilha pelo ID e
+ *  lê/escreve nela — assim o dono edita o guia de dentro do app de gestão, e o
+ *  guia do cliente atualiza sozinho (o CSV publicado se atualiza em minutos).
+ *
+ *  COMO LIGAR (uma vez): em Configurações do projeto → Propriedades do script:
+ *    GUIA_SHEET_ID = o ID da planilha do guia (o trecho entre /d/ e /edit da URL)
+ *    GUIA_ABA      = (opcional) nome da aba OU o gid dela (o número depois de
+ *                    ?gid= na URL). Vazio = usa a 1ª aba.
+ * -------------------------------------------------------------------------- */
+function _guiaAba() {
+  var id = _prop("GUIA_SHEET_ID");
+  if (!id) return null;
+  var ss = SpreadsheetApp.openById(id);
+  var aba = _prop("GUIA_ABA");
+  if (aba) {
+    var porNome = ss.getSheetByName(aba);
+    if (porNome) return porNome;
+    var gid = parseInt(aba, 10); // permite informar o gid da URL em vez do nome
+    if (!isNaN(gid)) {
+      var sheets = ss.getSheets();
+      for (var i = 0; i < sheets.length; i++) if (sheets[i].getSheetId() === gid) return sheets[i];
+    }
+  }
+  return ss.getSheets()[0] || null;
+}
+// Lê uma aba (objeto sheet) usando a própria 1ª linha como cabeçalho.
+function _lerSheetObj(sh) {
+  if (!sh) return [];
+  var valores = sh.getDataRange().getValues();
+  if (valores.length < 2) return [];
+  var cab = valores[0].map(function (c) { return String(c).trim(); });
+  var out = [];
+  for (var i = 1; i < valores.length; i++) {
+    var linha = valores[i];
+    if (linha.every(function (c) { return c === "" || c === null; })) continue;
+    var obj = {};
+    for (var j = 0; j < cab.length; j++) obj[cab[j]] = linha[j];
+    obj.__row = i + 1;
+    out.push(obj);
+  }
+  return out;
+}
+function _acharLinhaCol(sh, col, valor) {
+  var n = sh.getLastRow() - 1; if (n < 1 || col < 1) return -1;
+  var vals = sh.getRange(2, col, n, 1).getValues();
+  for (var i = 0; i < vals.length; i++) if (String(vals[i][0]) === String(valor)) return i + 2;
+  return -1;
+}
+
+function lerGuia() {
+  var sh = _guiaAba();
+  if (!sh) return { guia: [] };
+  var linhas = _lerSheetObj(sh).map(function (r) {
+    ["docura", "corpo", "taninos", "acidez"].forEach(function (k) { if (r[k] !== undefined) r[k] = _num(r[k]); });
+    return r;
+  });
+  return { guia: linhas };
+}
+
+function salvarVinhoGuia(vinho, idOriginal) {
+  var sh = _guiaAba();
+  if (!sh) throw new Error("Planilha do guia não configurada (defina GUIA_SHEET_ID nas propriedades do script).");
+  var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(function (c) { return String(c).trim(); });
+  var idCol = header.indexOf("id");
+  if (idCol < 0) throw new Error("A planilha do guia precisa de uma coluna 'id'.");
+  var alvo = idOriginal || vinho.id;
+  var linha = _acharLinhaCol(sh, idCol + 1, alvo);
+  var arr = header.map(function (col) { return vinho[col] != null ? vinho[col] : ""; });
+  if (linha > 0) sh.getRange(linha, 1, 1, header.length).setValues([arr]);
+  else sh.appendRow(arr);
+  return { ok: true };
+}
+
+function excluirVinhoGuia(id) {
+  var sh = _guiaAba();
+  if (!sh) return { ok: true };
+  var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(function (c) { return String(c).trim(); });
+  var idCol = header.indexOf("id");
+  if (idCol < 0) return { ok: true };
+  var linha = _acharLinhaCol(sh, idCol + 1, id);
+  if (linha > 0) sh.deleteRow(linha);
+  return { ok: true };
 }
 
 /**

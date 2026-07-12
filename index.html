@@ -94,6 +94,21 @@
     </div>
   </section>
 
+  <!-- ====================== ABA: GUIA (conteúdo do QR da adega) ====================== -->
+  <section id="aba-guia" class="aba hidden">
+    <div class="busca-wrap">
+      <input id="busca-guia" class="busca" type="search" inputmode="search" placeholder="Buscar vinho do guia…" autocomplete="off" />
+    </div>
+    <div class="estoque-acoes">
+      <button class="btn-secundario" id="btn-novo-guia">+ Novo vinho no guia</button>
+    </div>
+    <div class="resultado-info" id="guia-info"></div>
+    <main id="lista-guia" class="guia-lista"></main>
+    <div id="vazio-guia" class="vazio hidden">
+      <p>O guia ainda não tem vinhos aqui.<br />Toque em <b>+ Novo vinho no guia</b> para cadastrar, ou conecte a planilha do guia (engrenagem ⚙).</p>
+    </div>
+  </section>
+
   <!-- ====================== NAVEGAÇÃO INFERIOR ====================== -->
   <nav class="nav-inferior">
     <button class="nav-btn ativo" data-aba="estoque">
@@ -107,6 +122,9 @@
     </button>
     <button class="nav-btn" data-aba="giro">
       <span class="nav-ico">📊</span><span>Giro</span>
+    </button>
+    <button class="nav-btn" data-aba="guia">
+      <span class="nav-ico">📖</span><span>Guia</span>
     </button>
     <button class="nav-btn nav-fab" id="fab-add" title="Adicionar garrafa">+</button>
   </nav>
@@ -218,6 +236,51 @@
     <div class="carregando-caixa">
       <div class="spinner"></div>
       <p id="carregando-msg">Lendo a nota com a IA…</p>
+    </div>
+  </div>
+
+  <!-- ====================== MODAL: EDITAR VINHO DO GUIA ====================== -->
+  <div id="modal-guia" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-conteudo">
+      <div class="modal-topo">
+        <h2 id="modal-guia-titulo">Novo vinho no guia</h2>
+        <button class="modal-fechar" data-fecha aria-label="Fechar">✕</button>
+      </div>
+      <form id="form-guia" class="form">
+        <input type="hidden" name="id_original" />
+        <label>Nome do vinho <input name="nome" list="lista-vinhos" required placeholder="Ex.: Peccato Cabernet" /></label>
+        <div class="form-linha">
+          <label>Tipo
+            <select name="tipo"><option>Tinto</option><option>Branco</option><option>Rosé</option><option>Espumante</option></select>
+          </label>
+          <label>Código (liga ao estoque) <input name="codigo" placeholder="Ex.: 01022" /></label>
+        </div>
+        <div class="form-linha">
+          <label>Produtor <input name="produtor" placeholder="Opcional" /></label>
+          <label>Uva <input name="uva" placeholder="Ex.: Malbec" /></label>
+        </div>
+        <div class="form-linha">
+          <label>País <input name="pais" placeholder="Ex.: Argentina" /></label>
+          <label>Região <input name="regiao" placeholder="Opcional" /></label>
+        </div>
+        <div class="form-linha">
+          <label>Safra <input name="safra" placeholder="—" /></label>
+          <label>Álcool (%) <input name="alcool" inputmode="decimal" placeholder="Ex.: 13.5" /></label>
+        </div>
+        <div class="guia-escalas" id="guia-escalas"></div>
+        <label class="guia-check"><input type="checkbox" name="gelavel" /> Fica ótimo bem gelado</label>
+        <label>Temperatura de serviço <input name="temperatura" placeholder="Ex.: 16–18 °C" /></label>
+        <label>Harmonização (pratos) <textarea name="harmonizacao" rows="2" placeholder="Com o que combina"></textarea></label>
+        <label>Queijos <textarea name="queijos" rows="2"></textarea></label>
+        <label>Descrição <textarea name="descricao" rows="3" placeholder="Como o cliente vê o vinho"></textarea></label>
+        <label>Combina se você gosta… <input name="combina_se_voce_gosta" placeholder="Ex.: de tinto encorpado para churrasco." /></label>
+        <label>Foto (link) <input name="foto" placeholder="https://… ou fotos/arquivo.png" /></label>
+        <label>Adegas onde aparece (slug; separadas por ;) <input name="adegas" placeholder="ecopark-iv" /></label>
+        <div class="form-botoes">
+          <button type="button" class="btn-perigo hidden" id="btn-excluir-guia">Excluir</button>
+          <button type="submit" class="btn-primario">Salvar no guia</button>
+        </div>
+      </form>
     </div>
   </div>
 

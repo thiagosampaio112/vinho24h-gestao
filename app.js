@@ -85,6 +85,7 @@ async function carregar() {
   DADOS.estoque = DADOS.estoque || []; DADOS.compras = DADOS.compras || []; DADOS.fornecedores = DADOS.fornecedores || [];
   DADOS.vigiados = DADOS.vigiados || []; DADOS.precos = DADOS.precos || []; DADOS.lojas = DADOS.lojas || [];
   DADOS.pdvs = DADOS.pdvs || []; DADOS.pdvEstoque = DADOS.pdvEstoque || []; DADOS.vendas = DADOS.vendas || [];
+  DADOS.guia = DADOS.guia || []; // vinhos do guia do QR (editados por aqui, lidos pela planilha do guia)
   // Sempre há ao menos uma adega. A 1ª ativa é a "adega atual" da tela.
   if (!DADOS.pdvs.length) DADOS.pdvs = [{ nome: "Ecopark", ativo: "sim" }];
   const ativas = pdvsAtivos();
@@ -185,6 +186,29 @@ async function salvarLoja(loja, urlOriginal) {
 async function excluirLoja(url) {
   if (online()) { await apiPost("excluirLoja", { url }); }
   else { DADOS.lojas = DADOS.lojas.filter((l) => l.url !== url); gravarLocal(); }
+}
+
+// --- Guia do QR (o app edita; a planilha do guia é escrita pelo backend) ---
+function gerarIdGuia(nome) {
+  const base = String(nome || "vinho").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32) || "vinho";
+  let id = base, i = 2;
+  while (DADOS.guia.some((x) => x.id === id)) id = `${base}-${i++}`;
+  return id;
+}
+async function salvarVinhoGuia(vinho, idOriginal) {
+  if (!vinho.id) vinho.id = gerarIdGuia(vinho.nome);
+  if (online()) { await apiPost("salvarVinhoGuia", { vinho, idOriginal }); }
+  else {
+    const alvo = idOriginal || vinho.id;
+    const idx = DADOS.guia.findIndex((x) => x.id === alvo);
+    if (idx >= 0) DADOS.guia[idx] = { ...DADOS.guia[idx], ...vinho }; else DADOS.guia.push(vinho);
+    gravarLocal();
+  }
+}
+async function excluirVinhoGuia(id) {
+  if (online()) { await apiPost("excluirVinhoGuia", { id }); }
+  else { DADOS.guia = DADOS.guia.filter((x) => x.id !== id); gravarLocal(); }
 }
 
 // ======================================================================
@@ -1311,6 +1335,116 @@ function renderGiro() {
 $("#giro-periodo") && $("#giro-periodo").addEventListener("change", (e) => { giroPeriodo = e.target.value; renderGiro(); });
 
 // ======================================================================
+//  GUIA DO QR — editar o conteúdo que o cliente vê na porta da adega
+// ======================================================================
+const ESCALAS_GUIA = {
+  docura: ["Bem seco", "Seco", "Meio-seco", "Suave", "Doce", "Bem doce"],
+  corpo: ["Muito leve", "Leve", "Médio-leve", "Médio", "Encorpado", "Muito encorpado"],
+  taninos: ["Sem taninos", "Bem macio", "Macio", "Médio", "Marcante", "Muito marcante"],
+  acidez: ["Baixa", "Média-baixa", "Média", "Média-alta", "Alta", "Muito refrescante"],
+};
+const ESCALA_TITULO = { docura: "Doçura", corpo: "Corpo", taninos: "Taninos", acidez: "Acidez" };
+const filtroGuia = { busca: "" };
+
+function classeTipoGuia(t) { return classeTipo(t); }
+function renderGuia() {
+  const cont = $("#lista-guia");
+  const vazio = $("#vazio-guia");
+  const q = filtroGuia.busca.trim().toLowerCase();
+  let lista = DADOS.guia || [];
+  if (q) lista = lista.filter((v) => `${v.nome} ${v.uva} ${v.produtor} ${v.pais} ${v.codigo || ""}`.toLowerCase().includes(q));
+  $("#guia-info").textContent = (DADOS.guia || []).length ? `${lista.length} de ${DADOS.guia.length} ${DADOS.guia.length === 1 ? "vinho" : "vinhos"} no guia` : "";
+  $("#vazio-guia").classList.toggle("hidden", (DADOS.guia || []).length > 0);
+  cont.innerHTML = "";
+  lista.slice().sort((a, b) => String(a.nome).localeCompare(String(b.nome))).forEach((v) => {
+    const card = el("div", "guia-item");
+    const thumb = v.foto ? `<img class="guia-foto" src="${escaparAttr(v.foto)}" alt="" loading="lazy" onerror="this.style.display='none'" />` : `<div class="guia-foto vazia">🍷</div>`;
+    const noEstoque = (DADOS.estoque || []).some((e) => v.codigo && (mesmoCodigo(e.codigo, v.codigo) || mesmoCodigo(e.codigoBarras, v.codigo)));
+    card.innerHTML = `
+      ${thumb}
+      <div class="guia-corpo">
+        <div><span class="tag-tipo ${classeTipoGuia(v.tipo)}">${v.tipo || "—"}</span>
+          ${noEstoque ? '<span class="guia-selo">no estoque</span>' : ""}</div>
+        <div class="guia-nome">${escaparHtml(v.nome || "(sem nome)")}</div>
+        <div class="guia-sub">${[v.uva, v.pais].filter(Boolean).map(escaparHtml).join(" · ") || "&nbsp;"}</div>
+      </div>`;
+    card.addEventListener("click", () => abrirModalGuia(v));
+    cont.appendChild(card);
+  });
+}
+
+function montarEscalasGuia(v) {
+  const cont = $("#guia-escalas"); cont.innerHTML = "";
+  Object.keys(ESCALAS_GUIA).forEach((k) => {
+    const val = Math.max(0, Math.min(5, Number(v && v[k]) || 0));
+    const row = el("div", "guia-escala");
+    row.innerHTML = `<div class="ge-topo"><span>${ESCALA_TITULO[k]}</span><span class="ge-label" data-l="${k}">${ESCALAS_GUIA[k][val]}</span></div>
+      <input type="range" name="${k}" min="0" max="5" step="1" value="${val}" />`;
+    row.querySelector("input").addEventListener("input", (e) => {
+      row.querySelector(`[data-l="${k}"]`).textContent = ESCALAS_GUIA[k][Number(e.target.value)];
+    });
+    cont.appendChild(row);
+  });
+}
+
+function abrirModalGuia(v) {
+  const f = $("#form-guia");
+  f.reset();
+  const editando = !!v;
+  $("#modal-guia-titulo").textContent = editando ? "Editar vinho do guia" : "Novo vinho no guia";
+  $("#btn-excluir-guia").classList.toggle("hidden", !editando);
+  f.id_original.value = editando ? (v.id || "") : "";
+  const camposTexto = ["nome", "codigo", "produtor", "uva", "pais", "regiao", "safra", "alcool", "temperatura", "harmonizacao", "queijos", "descricao", "combina_se_voce_gosta", "foto", "adegas"];
+  camposTexto.forEach((c) => { if (f[c]) f[c].value = editando ? (v[c] != null ? v[c] : "") : ""; });
+  f.tipo.value = (editando && v.tipo) ? v.tipo : "Tinto";
+  f.gelavel.checked = editando ? (v.gelavel === true || v.gelavel === "sim" || v.gelavel === "SIM") : false;
+  if (!editando) f.adegas.value = (pdvsAtivos()[0] && "ecopark-iv") || "ecopark-iv";
+  montarEscalasGuia(editando ? v : {});
+  atualizarDatalists();
+  abrir("#modal-guia");
+}
+
+// Ao digitar o nome, se casar com um rótulo do estoque, sugere o código.
+function vincularCodigoGuia() {
+  const f = $("#form-guia");
+  if (f.codigo.value.trim()) return;
+  const alvo = normTexto(f.nome.value);
+  const it = (DADOS.estoque || []).find((e) => normTexto(e.nome) === alvo && alvo);
+  if (it && it.codigo) f.codigo.value = it.codigo;
+}
+
+$("#form-guia").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const orig = DADOS.guia.find((x) => x.id === f.id_original.value) || {};
+  const vinho = {
+    ...orig,
+    id: (orig.id || ""), nome: f.nome.value.trim(), codigo: f.codigo.value.trim(), produtor: f.produtor.value.trim(),
+    tipo: f.tipo.value, uva: f.uva.value.trim(), pais: f.pais.value.trim(), regiao: f.regiao.value.trim(),
+    safra: f.safra.value.trim(), alcool: f.alcool.value.trim(),
+    docura: Number(f.docura.value) || 0, corpo: Number(f.corpo.value) || 0, taninos: Number(f.taninos.value) || 0, acidez: Number(f.acidez.value) || 0,
+    gelavel: f.gelavel.checked ? "sim" : "", temperatura: f.temperatura.value.trim(),
+    harmonizacao: f.harmonizacao.value.trim(), queijos: f.queijos.value.trim(), descricao: f.descricao.value.trim(),
+    combina_se_voce_gosta: f.combina_se_voce_gosta.value.trim(), foto: f.foto.value.trim(), adegas: f.adegas.value.trim(),
+  };
+  if (!vinho.nome) return;
+  await comProgresso(() => salvarVinhoGuia(vinho, f.id_original.value || null));
+  fechar("#modal-guia"); await recarregar(); irPara("guia"); toast("Vinho do guia salvo ✓");
+});
+
+$("#btn-excluir-guia").addEventListener("click", async () => {
+  const id = $("#form-guia").id_original.value;
+  if (!id) return;
+  if (!confirm("Tirar este vinho do guia do QR?\n(Não mexe no seu estoque.)")) return;
+  await comProgresso(() => excluirVinhoGuia(id));
+  fechar("#modal-guia"); await recarregar(); toast("Vinho removido do guia");
+});
+
+$("#busca-guia").addEventListener("input", (e) => { filtroGuia.busca = e.target.value; renderGuia(); });
+$("#btn-novo-guia").addEventListener("click", () => abrirModalGuia(null));
+$("#form-guia").nome.addEventListener("change", vincularCodigoGuia);
+
+// ======================================================================
 //  MODAL — CONEXÃO (link + senha da planilha, guardado só neste aparelho)
 // ======================================================================
 $("#btn-config").addEventListener("click", () => {
@@ -1358,6 +1492,7 @@ function irPara(aba) {
   else if (aba === "compras") renderCompras();
   else if (aba === "ofertas") renderOfertas();
   else if (aba === "giro") renderGiro();
+  else if (aba === "guia") renderGuia();
   window.scrollTo(0, 0);
 }
 $$(".nav-btn[data-aba]").forEach((b) => b.addEventListener("click", () => irPara(b.dataset.aba)));
@@ -1421,6 +1556,7 @@ async function recarregar() {
   if (aba === "compras") renderCompras();
   else if (aba === "ofertas") renderOfertas();
   else if (aba === "giro") renderGiro();
+  else if (aba === "guia") renderGuia();
   else renderEstoque();
   atualizarDatalists();
 }
@@ -1435,7 +1571,7 @@ function escaparAttr(s) { return escaparHtml(s).replace(/"/g, "&quot;"); }
 function SEED() {
   // Sem vinhos de exemplo — o app começa vazio para você cadastrar os seus.
   return { fornecedores: [], vigiados: [], precos: [], compras: [], estoque: [], lojas: [],
-    pdvs: [{ nome: "Ecopark", ativo: "sim" }], pdvEstoque: [], vendas: [] };
+    pdvs: [{ nome: "Ecopark", ativo: "sim" }], pdvEstoque: [], vendas: [], guia: [] };
 }
 
 // ======================================================================
