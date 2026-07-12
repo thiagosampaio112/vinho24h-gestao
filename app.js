@@ -22,12 +22,20 @@ const CFG_KEY = "vinho24h_gestao_cfg";
 let API_URL = "";
 let API_TOKEN = "";
 let GEMINI_KEY = "";
+let GUIA_URL = ""; // link da planilha do guia do QR (guardado no aparelho, como a conexão do estoque)
 // Modelo da IA usada para ler as notas. Pode trocar se quiser outro.
 const MODELO_IA = "gemini-2.5-flash";
 function carregarConfig() {
-  try { const c = JSON.parse(localStorage.getItem(CFG_KEY) || "{}"); API_URL = c.url || ""; API_TOKEN = c.token || ""; GEMINI_KEY = c.geminiKey || ""; } catch (_) {}
+  try { const c = JSON.parse(localStorage.getItem(CFG_KEY) || "{}"); API_URL = c.url || ""; API_TOKEN = c.token || ""; GEMINI_KEY = c.geminiKey || ""; GUIA_URL = c.guiaUrl || ""; } catch (_) {}
 }
 carregarConfig();
+
+// Extrai o ID e o gid da aba a partir do link da planilha do guia colado na engrenagem.
+function guiaRef() {
+  const id = (String(GUIA_URL).match(/\/d\/([a-zA-Z0-9\-_]+)/) || [])[1] || "";
+  const gid = (String(GUIA_URL).match(/[?#&]gid=(\d+)/) || [])[1] || "";
+  return { id, gid };
+}
 
 // ---- Utilidades DOM -----------------------------------------------------
 const $  = (s) => document.querySelector(s);
@@ -53,16 +61,20 @@ const LS_KEY = "vinho24h_gestao_dados_v2";
 //  CAMADA DE DADOS  (Apps Script quando online; localStorage no demo)
 // ======================================================================
 async function apiGet() {
-  const resp = await fetch(`${API_URL}?token=${encodeURIComponent(API_TOKEN)}`, { cache: "no-store" });
+  const g = guiaRef();
+  let url = `${API_URL}?token=${encodeURIComponent(API_TOKEN)}`;
+  if (g.id) url += `&guiaId=${encodeURIComponent(g.id)}&guiaGid=${encodeURIComponent(g.gid)}`;
+  const resp = await fetch(url, { cache: "no-store" });
   if (!resp.ok) throw new Error("HTTP " + resp.status);
   return await resp.json();
 }
 async function apiPost(action, payload) {
+  const g = guiaRef();
   // text/plain evita o "preflight" de CORS que o Apps Script não responde bem.
   const resp = await fetch(API_URL, {
     method: "POST",
     headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ action, token: API_TOKEN, ...payload }),
+    body: JSON.stringify({ action, token: API_TOKEN, guiaId: g.id, guiaGid: g.gid, ...payload }),
   });
   if (!resp.ok) throw new Error("HTTP " + resp.status);
   const json = await resp.json();
@@ -1450,6 +1462,7 @@ $("#form-guia").nome.addEventListener("change", vincularCodigoGuia);
 $("#btn-config").addEventListener("click", () => {
   const f = $("#form-config");
   f.url.value = API_URL; f.token.value = API_TOKEN; f.geminiKey.value = GEMINI_KEY;
+  if (f.guiaUrl) f.guiaUrl.value = GUIA_URL;
   $("#config-status").textContent = "";
   abrir("#modal-config");
 });
@@ -1461,17 +1474,24 @@ $("#btn-testar").addEventListener("click", async () => {
   if (!url) { st.textContent = "Cole o link do app primeiro."; return; }
   st.textContent = "Testando…";
   try {
-    const resp = await fetch(`${url}?token=${encodeURIComponent(token)}`, { cache: "no-store" });
+    const gu = f.guiaUrl ? f.guiaUrl.value.trim() : "";
+    const gsid = (gu.match(/\/d\/([a-zA-Z0-9\-_]+)/) || [])[1] || "";
+    const ggid = (gu.match(/[?#&]gid=(\d+)/) || [])[1] || "";
+    let u = `${url}?token=${encodeURIComponent(token)}`;
+    if (gsid) u += `&guiaId=${encodeURIComponent(gsid)}&guiaGid=${encodeURIComponent(ggid)}`;
+    const resp = await fetch(u, { cache: "no-store" });
     const json = await resp.json();
     if (json.erro) throw new Error(json.erro);
-    st.textContent = `✓ Conectou! ${(json.estoque || []).length} itens na planilha.`;
+    const nEst = (json.estoque || []).length;
+    const nGuia = (json.guia || []).length;
+    st.textContent = `✓ Conectou! ${nEst} ${nEst === 1 ? "item" : "itens"} no estoque` + (gsid ? ` · ${nGuia} no guia` : "") + ".";
   } catch (err) { st.textContent = "✗ Não conectou: " + (err.message || "confira o link/senha"); }
 });
 
 $("#form-config").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
-  const cfg = { url: f.url.value.trim(), token: f.token.value.trim(), geminiKey: f.geminiKey.value.trim() };
+  const cfg = { url: f.url.value.trim(), token: f.token.value.trim(), geminiKey: f.geminiKey.value.trim(), guiaUrl: f.guiaUrl ? f.guiaUrl.value.trim() : GUIA_URL };
   localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
   carregarConfig(); marcarModo();
   fechar("#modal-config");
