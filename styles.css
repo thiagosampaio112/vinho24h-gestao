@@ -510,6 +510,10 @@ body {
 .guia-nome { font-weight: 700; color: var(--dourado-claro); }
 .guia-sub { font-size: 13px; color: var(--texto-suave); margin-top: 2px; }
 .guia-selo { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; background: #1f4d33; color: #bff0cf; margin-left: 4px; }
+.guia-selo.arquivado { background: #3a3320; color: #e0c98a; }
+.guia-item.arquivado { opacity: .82; }
+.guia-item.arquivado .guia-foto { filter: grayscale(.35); }
+.guia-reativar { flex: 0 0 auto; padding: 8px 12px; font-size: 13px; white-space: nowrap; }
 
 /* Sliders sensoriais (0–5) */
 .guia-escalas { display: flex; flex-direction: column; gap: 12px; background: var(--card); border: 1px solid var(--card-borda); border-radius: 12px; padding: 12px; }

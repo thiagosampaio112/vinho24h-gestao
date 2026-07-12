@@ -1356,31 +1356,55 @@ const ESCALAS_GUIA = {
   acidez: ["Baixa", "Média-baixa", "Média", "Média-alta", "Alta", "Muito refrescante"],
 };
 const ESCALA_TITULO = { docura: "Doçura", corpo: "Corpo", taninos: "Taninos", acidez: "Acidez" };
-const filtroGuia = { busca: "" };
+const filtroGuia = { busca: "", ver: "ativos" };
+// Slug da adega no guia do QR. Hoje só a Ecopark; quando entrar a J. PRIME,
+// esta escolha vira um seletor (multi-PDV já preparado no resto do app).
+const ADEGA_GUIA_SLUG = "ecopark-iv";
+// Arquivado = sem nenhuma adega no campo `adegas` (some do guia do cliente,
+// mas a ficha + foto ficam guardadas na planilha = a memória do rótulo).
+function guiaArquivado(v) { return !String((v && v.adegas) || "").trim(); }
 
 function classeTipoGuia(t) { return classeTipo(t); }
 function renderGuia() {
   const cont = $("#lista-guia");
-  const vazio = $("#vazio-guia");
   const q = filtroGuia.busca.trim().toLowerCase();
-  let lista = DADOS.guia || [];
+  const todos = DADOS.guia || [];
+  const ativos = todos.filter((v) => !guiaArquivado(v));
+  const arquivados = todos.filter((v) => guiaArquivado(v));
+  // Contagem nos chips do filtro.
+  const fa = $('#guia-filtros [data-ver="ativos"]');
+  const fx = $('#guia-filtros [data-ver="arquivados"]');
+  if (fa) fa.textContent = `No guia (${ativos.length})`;
+  if (fx) fx.textContent = `Memória (${arquivados.length})`;
+  $('#guia-filtros [data-ver="ativos"]').classList.toggle("ativo", filtroGuia.ver === "ativos");
+  $('#guia-filtros [data-ver="arquivados"]').classList.toggle("ativo", filtroGuia.ver === "arquivados");
+
+  const base = filtroGuia.ver === "arquivados" ? arquivados : ativos;
+  let lista = base;
   if (q) lista = lista.filter((v) => `${v.nome} ${v.uva} ${v.produtor} ${v.pais} ${v.codigo || ""}`.toLowerCase().includes(q));
-  $("#guia-info").textContent = (DADOS.guia || []).length ? `${lista.length} de ${DADOS.guia.length} ${DADOS.guia.length === 1 ? "vinho" : "vinhos"} no guia` : "";
-  $("#vazio-guia").classList.toggle("hidden", (DADOS.guia || []).length > 0);
+  const rotulo = filtroGuia.ver === "arquivados" ? "na memória" : "no guia";
+  $("#guia-info").textContent = todos.length ? `${lista.length} de ${base.length} ${base.length === 1 ? "vinho" : "vinhos"} ${rotulo}` : "";
+  $("#vazio-guia").classList.toggle("hidden", todos.length > 0);
   cont.innerHTML = "";
   lista.slice().sort((a, b) => String(a.nome).localeCompare(String(b.nome))).forEach((v) => {
-    const card = el("div", "guia-item");
+    const arquivado = filtroGuia.ver === "arquivados";
+    const card = el("div", "guia-item" + (arquivado ? " arquivado" : ""));
     const thumb = v.foto ? `<img class="guia-foto" src="${escaparAttr(v.foto)}" alt="" loading="lazy" onerror="this.style.display='none'" />` : `<div class="guia-foto vazia">🍷</div>`;
     const noEstoque = (DADOS.estoque || []).some((e) => v.codigo && (mesmoCodigo(e.codigo, v.codigo) || mesmoCodigo(e.codigoBarras, v.codigo)));
     card.innerHTML = `
       ${thumb}
       <div class="guia-corpo">
         <div><span class="tag-tipo ${classeTipoGuia(v.tipo)}">${v.tipo || "—"}</span>
-          ${noEstoque ? '<span class="guia-selo">no estoque</span>' : ""}</div>
+          ${noEstoque ? '<span class="guia-selo">no estoque</span>' : ""}
+          ${arquivado ? '<span class="guia-selo arquivado">arquivado</span>' : ""}</div>
         <div class="guia-nome">${escaparHtml(v.nome || "(sem nome)")}</div>
         <div class="guia-sub">${[v.uva, v.pais].filter(Boolean).map(escaparHtml).join(" · ") || "&nbsp;"}</div>
-      </div>`;
+      </div>
+      ${arquivado ? '<button type="button" class="btn-secundario guia-reativar">↩ Reativar</button>' : ""}`;
     card.addEventListener("click", () => abrirModalGuia(v));
+    if (arquivado) {
+      card.querySelector(".guia-reativar").addEventListener("click", (ev) => { ev.stopPropagation(); reativarGuia(v); });
+    }
     cont.appendChild(card);
   });
 }
@@ -1405,6 +1429,10 @@ function abrirModalGuia(v) {
   const editando = !!v;
   $("#modal-guia-titulo").textContent = editando ? "Editar vinho do guia" : "Novo vinho no guia";
   $("#btn-excluir-guia").classList.toggle("hidden", !editando);
+  const arq = editando && guiaArquivado(v);
+  const btnArq = $("#btn-arquivar-guia");
+  btnArq.classList.toggle("hidden", !editando);
+  btnArq.textContent = arq ? "↩ Reativar no guia" : "Tirar do guia";
   f.id_original.value = editando ? (v.id || "") : "";
   if (f.id) f.id.value = editando ? (v.id || "") : "";
   const camposTexto = ["nome", "codigo", "produtor", "uva", "pais", "regiao", "safra", "alcool", "temperatura", "harmonizacao", "queijos", "descricao", "combina_se_voce_gosta", "foto", "adegas"];
@@ -1449,12 +1477,42 @@ $("#form-guia").addEventListener("submit", async (e) => {
   fechar("#modal-guia"); await recarregar(); irPara("guia"); toast("Vinho do guia salvo ✓");
 });
 
+// Arquivar = esvaziar `adegas` (some do guia do cliente, ficha + foto ficam
+// guardadas na planilha). Reativar = repor o slug da adega atual. Ambos usam o
+// salvarVinhoGuia que já existe → NÃO precisa reimplantar o backend.
+async function arquivarGuia(v) {
+  await comProgresso(() => salvarVinhoGuia({ ...v, adegas: "" }, v.id));
+  fechar("#modal-guia"); await recarregar(); irPara("guia"); toast("Guardado na memória de rótulos");
+}
+async function reativarGuia(v) {
+  const adegas = String(v.adegas || "").trim() || ADEGA_GUIA_SLUG;
+  await comProgresso(() => salvarVinhoGuia({ ...v, adegas }, v.id));
+  filtroGuia.ver = "ativos";
+  fechar("#modal-guia"); await recarregar(); irPara("guia"); toast("Vinho de volta ao guia ✓");
+}
+
+$("#btn-arquivar-guia").addEventListener("click", async () => {
+  const id = $("#form-guia").id_original.value;
+  const v = (DADOS.guia || []).find((x) => x.id === id);
+  if (!v) return;
+  if (guiaArquivado(v)) { reativarGuia(v); return; }
+  if (!confirm("Tirar este vinho do guia do QR?\nA ficha e a foto ficam guardadas na memória — dá pra reativar quando o rótulo voltar.\n(Não mexe no seu estoque.)")) return;
+  arquivarGuia(v);
+});
+
 $("#btn-excluir-guia").addEventListener("click", async () => {
   const id = $("#form-guia").id_original.value;
   if (!id) return;
-  if (!confirm("Tirar este vinho do guia do QR?\n(Não mexe no seu estoque.)")) return;
+  if (!confirm("Excluir este vinho DE VEZ?\nApaga a ficha e a foto da memória (não dá pra reativar).\n(Não mexe no seu estoque.)")) return;
   await comProgresso(() => excluirVinhoGuia(id));
-  fechar("#modal-guia"); await recarregar(); toast("Vinho removido do guia");
+  fechar("#modal-guia"); await recarregar(); toast("Vinho excluído do guia");
+});
+
+$("#guia-filtros").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-ver]");
+  if (!b) return;
+  filtroGuia.ver = b.dataset.ver;
+  renderGuia();
 });
 
 $("#busca-guia").addEventListener("input", (e) => { filtroGuia.busca = e.target.value; renderGuia(); });
@@ -1572,9 +1630,11 @@ $("#btn-foto-usar").addEventListener("click", async () => {
 async function editarFotoGarrafaIA(base64, mime) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODELO_IMG}:generateContent?key=${encodeURIComponent(GEMINI_KEY)}`;
   const instrucao =
-    "Isole a GARRAFA de vinho desta foto. Remova completamente o fundo, deixando-o TOTALMENTE TRANSPARENTE (sem cor de fundo). " +
+    "Recorte APENAS a GARRAFA de vinho desta foto, como um adesivo/sticker PNG. " +
+    "O fundo DEVE ficar 100% TRANSPARENTE (canal alfa vazio): NÃO deixe fundo branco, NÃO deixe nenhum retângulo, cor sólida, gradiente ou cenário atrás da garrafa. " +
+    "Onde não há garrafa, os pixels devem ser transparentes — nada de branco. " +
     "Mostre a garrafa inteira, em pé, centralizada, estilo foto de produto de catálogo, iluminação suave e uniforme, sem sombra no chão, sem reflexos exagerados. " +
-    "Mantenha o RÓTULO fiel ao original (não invente texto). Não adicione bordas, texto ou marca d'água. Devolva apenas a imagem (PNG com transparência).";
+    "Mantenha o RÓTULO fiel ao original (não invente texto). Não adicione bordas, texto ou marca d'água. Devolva apenas a imagem (PNG com transparência real).";
   const body = {
     contents: [{ parts: [{ inline_data: { mime_type: mime, data: base64 } }, { text: instrucao }] }],
     generationConfig: { responseModalities: ["IMAGE"] },

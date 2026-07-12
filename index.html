@@ -102,6 +102,10 @@
     <div class="estoque-acoes">
       <button class="btn-secundario" id="btn-novo-guia">+ Novo vinho no guia</button>
     </div>
+    <div class="filtros" id="guia-filtros">
+      <button class="chip ativo" data-ver="ativos" type="button">No guia</button>
+      <button class="chip" data-ver="arquivados" type="button">Memória (arquivados)</button>
+    </div>
     <div class="resultado-info" id="guia-info"></div>
     <main id="lista-guia" class="guia-lista"></main>
     <div id="vazio-guia" class="vazio hidden">
@@ -290,7 +294,8 @@
         <label>Foto (link) <input name="foto" placeholder="https://… ou fotos/arquivo.png" /></label>
         <label>Adegas onde aparece (slug; separadas por ;) <input name="adegas" placeholder="ecopark-iv" /></label>
         <div class="form-botoes">
-          <button type="button" class="btn-perigo hidden" id="btn-excluir-guia">Excluir</button>
+          <button type="button" class="btn-secundario hidden" id="btn-arquivar-guia">Tirar do guia</button>
+          <button type="button" class="btn-perigo hidden" id="btn-excluir-guia">Excluir de vez</button>
           <button type="submit" class="btn-primario">Salvar no guia</button>
         </div>
       </form>
