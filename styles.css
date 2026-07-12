@@ -449,6 +449,9 @@ body {
 .conf-resumo { font-size: 13px; color: var(--texto); background: var(--card); border: 1px solid var(--card-borda); border-radius: 10px; padding: 9px 12px; }
 .conf-periodo { font-size: 13px; color: var(--dourado-claro); }
 .conf-periodo b { color: var(--texto); }
+.conf-jaimport { font-size: 12px; color: var(--texto-suave); background: var(--card); border: 1px solid var(--card-borda); border-radius: 10px; padding: 8px 12px; }
+.conf-jaimport.alerta { border-color: var(--amarelo); color: var(--texto); }
+.conf-jaimport.alerta b { color: var(--amarelo); }
 .conf-lista { display: flex; flex-direction: column; gap: 7px; max-height: 52vh; overflow-y: auto; margin: 4px 0; }
 .conf-linha {
   display: flex; align-items: center; gap: 10px;

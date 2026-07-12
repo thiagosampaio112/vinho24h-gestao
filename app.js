@@ -945,6 +945,27 @@ function opcoesPdv(sel) {
   return pdvsAtivos().map((p) => `<option value="${escaparAttr(p.nome)}" ${p.nome === sel ? "selected" : ""}>${escaparHtml(p.nome)}</option>`).join("");
 }
 function isoMenosDias(dias) { const d = new Date(); d.setDate(d.getDate() - dias); return d.toISOString().slice(0, 10); }
+function isoMaisDias(iso, dias) {
+  const p = String(iso).split("-").map(Number);
+  const d = new Date(Date.UTC(p[0], (p[1] || 1) - 1, p[2] || 1));
+  d.setUTCDate(d.getUTCDate() + dias);
+  return d.toISOString().slice(0, 10);
+}
+// Períodos de vendas já importados numa adega (para evitar duplicidade).
+function periodosImportados(pdv) {
+  return periodosVendas().filter((p) => p.pdv === pdv)
+    .map((p) => ({ inicio: p.inicio, fim: p.fim }))
+    .sort((a, b) => String(a.inicio).localeCompare(String(b.inicio)));
+}
+// Sugere começar no dia seguinte ao último período já importado (evita sobreposição).
+function proximoInicioSugerido(pdv) {
+  const ps = periodosImportados(pdv);
+  if (!ps.length) return isoMenosDias(30);
+  const ultimoFim = ps.map((p) => p.fim).sort().slice(-1)[0];
+  return ultimoFim ? isoMaisDias(ultimoFim, 1) : isoMenosDias(30);
+}
+function periodosSeSobrepoem(a, b) { return String(a.inicio) <= String(b.fim) && String(b.inicio) <= String(a.fim); }
+function faixaSobreposta(a, b) { return { inicio: a.inicio > b.inicio ? a.inicio : b.inicio, fim: a.fim < b.fim ? a.fim : b.fim }; }
 // Mapeia a categoria do sistema para o nosso "tipo" (Tinto/Branco/Rosé/Espumante).
 function tipoDoRotulo(categoria) {
   const c = normTexto(categoria);
@@ -1071,9 +1092,10 @@ function abrirConfVendas(itens) {
   });
   confVendas = { pdv: pdvAtual, linhas };
   $("#conf-vendas-pdv").innerHTML = opcoesPdv(pdvAtual);
-  $("#conf-vendas-inicio").value = isoMenosDias(30);
+  $("#conf-vendas-inicio").value = proximoInicioSugerido(pdvAtual);
   $("#conf-vendas-fim").value = hojeISO();
   atualizarPeriodoLabel();
+  atualizarJaImportados(pdvAtual);
   renderConfVendas();
   abrir("#modal-conf-vendas");
 }
@@ -1082,7 +1104,21 @@ function atualizarPeriodoLabel() {
   const i = $("#conf-vendas-inicio").value, f = $("#conf-vendas-fim").value;
   $("#conf-vendas-periodo").innerHTML = (i && f) ? `📅 Período: <b>${dataBR(i)}</b> até <b>${dataBR(f)}</b>` : "";
 }
-["#conf-vendas-inicio", "#conf-vendas-fim"].forEach((s) => $(s).addEventListener("change", atualizarPeriodoLabel));
+// Mostra os períodos já importados na adega e sinaliza sobreposição com o atual.
+function atualizarJaImportados(pdv) {
+  const cont = $("#conf-vendas-jaimport"); if (!cont) return;
+  const ps = periodosImportados(pdv);
+  if (!ps.length) { cont.innerHTML = "Nenhuma venda importada nesta adega ainda."; cont.className = "conf-jaimport"; return; }
+  const atual = { inicio: $("#conf-vendas-inicio").value, fim: $("#conf-vendas-fim").value };
+  const temSobrep = atual.inicio && atual.fim && ps.some((p) => periodosSeSobrepoem(p, atual));
+  const lista = ps.map((p) => `${dataBR(p.inicio)}–${dataBR(p.fim)}`).join(" · ");
+  cont.innerHTML = `Já importados nesta adega: ${lista}` + (temSobrep ? `<br><b>⚠ o período atual se sobrepõe a um destes.</b>` : "");
+  cont.className = "conf-jaimport" + (temSobrep ? " alerta" : "");
+}
+["#conf-vendas-inicio", "#conf-vendas-fim"].forEach((s) => $(s).addEventListener("change", () => {
+  atualizarPeriodoLabel();
+  atualizarJaImportados($("#conf-vendas-pdv").value || pdvAtual);
+}));
 function renderConfVendas() {
   const linhas = confVendas.linhas;
   const inc = linhas.filter((l) => l.incluir);
@@ -1122,10 +1158,18 @@ function renderConfVendas() {
     renderConfVendas();
   }));
 }
-$("#conf-vendas-pdv").addEventListener("change", (e) => { if (confVendas) { confVendas.pdv = e.target.value; renderConfVendas(); } });
+$("#conf-vendas-pdv").addEventListener("change", (e) => {
+  if (!confVendas) return;
+  confVendas.pdv = e.target.value;
+  $("#conf-vendas-inicio").value = proximoInicioSugerido(e.target.value);
+  atualizarPeriodoLabel();
+  atualizarJaImportados(e.target.value);
+  renderConfVendas();
+});
 $("#btn-conf-vendas-salvar").addEventListener("click", async () => {
   const pdv = $("#conf-vendas-pdv").value || pdvAtual;
   const periodo = { inicio: $("#conf-vendas-inicio").value || isoMenosDias(30), fim: $("#conf-vendas-fim").value || hojeISO() };
+  if (periodo.inicio > periodo.fim) { toast("A data inicial está depois da final — confira o período"); return; }
   const resolvidos = confVendas.linhas.filter((l) => l.incluir).map((l) => ({
     sku: l.criarNovo || !l.skuAlvo ? l.skuNovo : l.skuAlvo,
     novo: l.criarNovo || !l.skuAlvo,
@@ -1134,9 +1178,23 @@ $("#btn-conf-vendas-salvar").addEventListener("click", async () => {
     qtd: l.qtd, precoMedio: l.precoMedio, valorVendido: l.valorVendido,
   }));
   if (!resolvidos.length) { toast("Marque ao menos um rótulo"); return; }
-  await comProgresso(() => aplicarImportVendas(periodo, pdv, resolvidos));
+
+  // --- Guarda de duplicidade (por período) ---
+  const existentes = periodosImportados(pdv);
+  const exato = existentes.find((p) => p.inicio === periodo.inicio && p.fim === periodo.fim);
+  const sobrepostos = existentes.filter((p) => !(p.inicio === periodo.inicio && p.fim === periodo.fim) && periodosSeSobrepoem(p, periodo));
+  if (exato) {
+    if (!confirm(`Você já importou vendas exatamente deste período (${dataBR(periodo.inicio)}–${dataBR(periodo.fim)}).\n\nVou SUBSTITUIR: as garrafas da importação antiga voltam para a adega e as novas são aplicadas (não duplica).\n\nContinuar?`)) return;
+  } else if (sobrepostos.length) {
+    const faixas = sobrepostos.map((p) => { const f = faixaSobreposta(p, periodo); return `• ${dataBR(f.inicio)}–${dataBR(f.fim)}`; }).join("\n");
+    if (!confirm(`⚠ ATENÇÃO — sobreposição de período!\n\nEste período pega dias que você já importou:\n${faixas}\n\nAs vendas desses dias serão contadas EM DOBRO (descontam da adega duas vezes).\n\nTem certeza que quer importar assim mesmo?`)) return;
+  }
+  await comProgresso(async () => {
+    if (exato) await excluirVendasPeriodo(pdv, exato.inicio, exato.fim); // substitui: remove o antigo e devolve à adega
+    await aplicarImportVendas(periodo, pdv, resolvidos);
+  });
   fechar("#modal-conf-vendas"); pdvAtual = pdv; await recarregar(); irPara("giro");
-  toast(`Vendas importadas ✓ (${resolvidos.length} rótulos)`);
+  toast(exato ? `Período substituído ✓ (${resolvidos.length} rótulos)` : `Vendas importadas ✓ (${resolvidos.length} rótulos)`);
 });
 
 // ======================================================================
