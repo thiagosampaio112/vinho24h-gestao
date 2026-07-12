@@ -297,6 +297,24 @@
     </div>
   </div>
 
+  <!-- ====================== MODAL: CÂMERA (foto da garrafa) ====================== -->
+  <div id="modal-camera" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-conteudo modal-camera-box">
+      <div class="modal-topo">
+        <h2>Foto da garrafa</h2>
+        <button class="modal-fechar" data-fecha aria-label="Fechar">✕</button>
+      </div>
+      <div class="cam-wrap">
+        <video id="cam-video" autoplay playsinline muted></video>
+      </div>
+      <p class="dica" id="cam-status"></p>
+      <div class="cam-acoes">
+        <button type="button" class="btn-secundario" id="btn-cam-arquivo">🖼️ Arquivo</button>
+        <button type="button" class="btn-primario" id="btn-cam-capturar">📸 Capturar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ====================== MODAL: CONEXÃO ====================== -->
   <div id="modal-config" class="modal-overlay hidden" role="dialog" aria-modal="true">
     <div class="modal-conteudo">

@@ -527,3 +527,10 @@ body {
 .guia-foto-ctrl .btn-secundario { padding: 10px 12px; font-size: 14px; }
 .guia-foto-aprovar { display: flex; gap: 8px; }
 .guia-foto-aprovar button { flex: 1; padding: 9px 10px; font-size: 14px; }
+
+/* Câmera ao vivo */
+.cam-wrap { background: #000; border-radius: 12px; overflow: hidden; }
+#cam-video { width: 100%; max-height: 62vh; display: block; object-fit: contain; background: #000; }
+.cam-acoes { display: flex; gap: 10px; margin-top: 12px; }
+.cam-acoes button { flex: 1; padding: 14px; font-size: 16px; }
+#btn-cam-capturar { flex: 2; }

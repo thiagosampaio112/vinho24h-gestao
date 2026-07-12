@@ -1,6 +1,6 @@
 /* Service Worker — cache do app (funciona offline / instalável).
    Ao publicar uma nova versão, aumente o número do CACHE. */
-const CACHE = "vinho24h-gestao-v18";
+const CACHE = "vinho24h-gestao-v19";
 const ARQUIVOS = [
   "./",
   "index.html",

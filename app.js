@@ -1471,11 +1471,47 @@ function mostrarThumbGuia(src) {
   t.classList.toggle("vazia", !src);
 }
 
-$("#btn-foto-guia").addEventListener("click", () => {
-  if (!GEMINI_KEY) { toast("Configure a chave da IA na engrenagem ⚙ primeiro"); $("#btn-config").click(); return; }
+let camStream = null;
+function podeFoto() {
+  if (!GEMINI_KEY) { toast("Configure a chave da IA na engrenagem ⚙ primeiro"); $("#btn-config").click(); return false; }
   const f = $("#form-guia");
-  if (!f.nome.value.trim()) { toast("Preencha o nome do vinho antes da foto"); f.nome.focus(); return; }
-  $("#input-foto-guia").click();
+  if (!f.nome.value.trim()) { toast("Preencha o nome do vinho antes da foto"); f.nome.focus(); return false; }
+  return true;
+}
+$("#btn-foto-guia").addEventListener("click", () => { if (podeFoto()) abrirCamera(); });
+$("#btn-foto-refazer").addEventListener("click", () => { if (podeFoto()) abrirCamera(); });
+
+// Abre a câmera ao vivo (câmera de trás no celular). Se não houver câmera
+// (ou o usuário negar), cai direto no seletor de arquivo.
+async function abrirCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $("#input-foto-guia").click(); return; }
+  abrir("#modal-camera");
+  $("#cam-status").textContent = "Abrindo a câmera…";
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+    const v = $("#cam-video"); v.srcObject = camStream; $("#cam-status").textContent = "";
+  } catch (e) {
+    console.warn(e); fecharCamera();
+    toast("Câmera indisponível aqui — escolha um arquivo");
+    $("#input-foto-guia").click();
+  }
+}
+function fecharCamera() {
+  if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null; }
+  const v = $("#cam-video"); if (v) v.srcObject = null;
+  fechar("#modal-camera");
+}
+$("#btn-cam-arquivo").addEventListener("click", () => { fecharCamera(); $("#input-foto-guia").click(); });
+$("#btn-cam-capturar").addEventListener("click", () => {
+  const v = $("#cam-video");
+  if (!v || !v.videoWidth) { toast("A câmera ainda não está pronta"); return; }
+  let w = v.videoWidth, h = v.videoHeight;
+  const max = 1600; if (w > max || h > max) { const s = max / Math.max(w, h); w = Math.round(w * s); h = Math.round(h * s); }
+  const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+  cv.getContext("2d").drawImage(v, 0, 0, w, h);
+  const base64 = cv.toDataURL("image/jpeg", 0.9).split(",")[1];
+  fecharCamera();
+  processarFotoIA(base64, "image/jpeg");
 });
 
 $("#input-foto-guia").addEventListener("change", async (e) => {
@@ -1483,9 +1519,16 @@ $("#input-foto-guia").addEventListener("change", async (e) => {
   e.target.value = "";
   if (!file) return;
   try {
+    const { base64, mime } = await prepararArquivo(file);
+    await processarFotoIA(base64, mime);
+  } catch (err) { console.error(err); toast("Não consegui ler a foto: " + (err.message || "tente outra")); }
+});
+
+// IA isola a garrafa → app padroniza o tamanho → mostra para aprovar.
+async function processarFotoIA(base64, mime) {
+  try {
     $("#carregando-msg").textContent = "Deixando a garrafa no padrão (IA)…";
     abrir("#carregando");
-    const { base64, mime } = await prepararArquivo(file);
     const editada = await editarFotoGarrafaIA(base64, mime);
     const padronizada = await padronizarGarrafa("data:" + (editada.mime || "image/png") + ";base64," + editada.base64);
     fechar("#carregando");
@@ -1496,9 +1539,7 @@ $("#input-foto-guia").addEventListener("change", async (e) => {
     fechar("#carregando"); console.error(err);
     toast("Não consegui processar a foto: " + (err.message || "tente outra"));
   }
-});
-
-$("#btn-foto-refazer").addEventListener("click", () => $("#input-foto-guia").click());
+}
 
 $("#btn-foto-usar").addEventListener("click", async () => {
   if (!guiaFotoProcessada) return;
@@ -1683,7 +1724,13 @@ $("#busca").addEventListener("input", (e) => { filtro.busca = e.target.value; re
 
 // Modais: abrir/fechar
 function abrir(sel) { $(sel).classList.remove("hidden"); document.body.style.overflow = "hidden"; }
-function fechar(sel) { $(sel).classList.add("hidden"); document.body.style.overflow = ""; }
+function fechar(sel) {
+  if (sel === "#modal-camera" && typeof camStream !== "undefined" && camStream) {
+    camStream.getTracks().forEach((t) => t.stop()); camStream = null;
+    const v = $("#cam-video"); if (v) v.srcObject = null;
+  }
+  $(sel).classList.add("hidden"); document.body.style.overflow = "";
+}
 $$(".modal-overlay").forEach((ov) => {
   ov.addEventListener("click", (e) => { if (e.target === ov || e.target.hasAttribute("data-fecha")) fechar("#" + ov.id); });
 });
