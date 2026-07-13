@@ -328,7 +328,16 @@
         <button class="modal-fechar" data-fecha aria-label="Fechar">✕</button>
       </div>
       <form id="form-config" class="form">
-        <p class="dica">Cole aqui o link e a senha do seu Apps Script (veja o SETUP.md).
+        <div class="config-arquivo">
+          <p class="dica">Recebeu um <b>arquivo de configuração</b>? Carregue aqui — os campos preenchem sozinhos e é só <b>Testar</b> e <b>Salvar</b>.</p>
+          <div class="form-botoes">
+            <button type="button" class="btn-secundario" id="btn-config-carregar">📥 Carregar arquivo</button>
+            <button type="button" class="btn-secundario" id="btn-config-baixar">📤 Baixar meu arquivo</button>
+          </div>
+          <input id="input-config-arquivo" type="file" accept=".json,application/json,.txt,text/plain" class="hidden" />
+        </div>
+        <hr class="divisor" />
+        <p class="dica">Ou preencha manualmente: cole o link e a senha do seu Apps Script (veja o SETUP.md).
           Fica guardado só neste aparelho. Deixe em branco para usar o modo demonstração.</p>
         <label>Link do app (termina em /exec)
           <input name="url" type="url" placeholder="https://script.google.com/macros/s/…/exec" />

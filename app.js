@@ -1738,6 +1738,52 @@ $("#form-config").addEventListener("submit", async (e) => {
   toast(online() ? "Conectado à planilha ✓" : "Modo demonstração");
 });
 
+// --- Configuração por arquivo (onboarding fácil das sócias) ---
+// O dono preenche uma vez, "Baixar meu arquivo" gera um .json; manda pras
+// sócias (WhatsApp etc.); elas "Carregar arquivo" → preenche + testa → Salvar.
+function baixarConfigArquivo() {
+  const f = $("#form-config");
+  const cfg = {
+    app: "vinho24h-gestao", tipo: "config",
+    url: f.url.value.trim(), token: f.token.value.trim(),
+    geminiKey: f.geminiKey.value.trim(), guiaUrl: f.guiaUrl ? f.guiaUrl.value.trim() : "",
+  };
+  if (!cfg.url && !cfg.token) { $("#config-status").textContent = "Preencha os campos antes de baixar o arquivo."; return; }
+  const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "vinho24h-config.json";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  $("#config-status").textContent = "Arquivo baixado ✓ — mande pras sócias. (Contém a senha e a chave; compartilhe só com quem é de confiança.)";
+}
+
+async function carregarConfigArquivo(file) {
+  const st = $("#config-status");
+  try {
+    const txt = await file.text();
+    const c = JSON.parse(txt);
+    if (c.tipo && c.tipo !== "config") throw new Error("tipo");
+    const f = $("#form-config");
+    if (c.url != null) f.url.value = String(c.url).trim();
+    if (c.token != null) f.token.value = String(c.token).trim();
+    if (c.geminiKey != null) f.geminiKey.value = String(c.geminiKey).trim();
+    if (f.guiaUrl && c.guiaUrl != null) f.guiaUrl.value = String(c.guiaUrl).trim();
+    st.textContent = "Configuração carregada — testando…";
+    $("#btn-testar").click();
+  } catch (err) {
+    st.textContent = "✗ Não consegui ler esse arquivo. Peça um arquivo de configuração novo (.json).";
+  }
+}
+
+$("#btn-config-baixar").addEventListener("click", baixarConfigArquivo);
+$("#btn-config-carregar").addEventListener("click", () => $("#input-config-arquivo").click());
+$("#input-config-arquivo").addEventListener("change", (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (file) carregarConfigArquivo(file);
+  e.target.value = "";
+});
+
 // ======================================================================
 //  NAVEGAÇÃO / HELPERS DE UI
 // ======================================================================

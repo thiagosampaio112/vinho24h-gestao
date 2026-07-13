@@ -515,6 +515,11 @@ body {
 .guia-item.arquivado .guia-foto { filter: grayscale(.35); }
 .guia-reativar { flex: 0 0 auto; padding: 8px 12px; font-size: 13px; white-space: nowrap; }
 
+/* Bloco de configuração por arquivo (onboarding fácil) */
+.config-arquivo { background: var(--card); border: 1px solid var(--card-borda); border-radius: 12px; padding: 12px; }
+.config-arquivo .dica { margin-top: 0; }
+.config-arquivo .form-botoes { margin-top: 8px; }
+
 /* Sliders sensoriais (0–5) */
 .guia-escalas { display: flex; flex-direction: column; gap: 12px; background: var(--card); border: 1px solid var(--card-borda); border-radius: 12px; padding: 12px; }
 .guia-escala .ge-topo { display: flex; justify-content: space-between; font-size: 13px; color: var(--texto-suave); margin-bottom: 4px; }
