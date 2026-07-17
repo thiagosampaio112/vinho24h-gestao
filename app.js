@@ -1448,6 +1448,50 @@ function montarEscalasGuia(v) {
     cont.appendChild(row);
   });
 }
+// Ajusta os sliders sensoriais já montados (usado pelo preenchimento por IA).
+function setEscalasGuia(vals) {
+  Object.keys(ESCALAS_GUIA).forEach((k) => {
+    if (vals[k] == null) return;
+    const val = Math.max(0, Math.min(5, Number(vals[k]) || 0));
+    const input = document.querySelector(`#guia-escalas input[name="${k}"]`);
+    const label = document.querySelector(`#guia-escalas [data-l="${k}"]`);
+    if (input) input.value = val;
+    if (label) label.textContent = ESCALAS_GUIA[k][val];
+  });
+}
+
+// Preenche a ficha do guia por IA a partir do nome do vinho. Devolve as 4 notas
+// sensoriais (0-5) + textos. NÃO inventa factual (safra, %álcool, país, região).
+async function preencherGuiaIA(dados) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODELO_IA}:generateContent?key=${encodeURIComponent(GEMINI_KEY)}`;
+  const ctx = [`Vinho: ${dados.nome}`,
+    dados.produtor ? `Produtor: ${dados.produtor}` : "",
+    dados.tipo ? `Tipo: ${dados.tipo}` : "",
+    dados.uva ? `Uva: ${dados.uva}` : "",
+    dados.pais ? `País: ${dados.pais}` : ""].filter(Boolean).join(" | ");
+  const instrucao =
+    "Você é sommelier. Preencha uma ficha de guia de vinhos para CLIENTES LEIGOS, em português do Brasil, sobre o vinho do contexto. " +
+    "Responda SOMENTE em JSON: " +
+    '{"tipo":"Tinto|Branco|Rosé|Espumante","uva":"","docura":0,"corpo":0,"taninos":0,"acidez":0,"gelavel":false,"temperatura":"","harmonizacao":"","queijos":"","descricao":"","combina_se_voce_gosta":""}. ' +
+    "As notas são inteiros de 0 a 5: docura (0=bem seco, 5=bem doce); corpo (0=muito leve, 5=muito encorpado); " +
+    "taninos (0=sem taninos, 5=muito marcante; use 0 para brancos/espumantes/rosés na maioria); acidez (0=baixa, 5=muito refrescante). " +
+    "gelavel=true se fica ótimo bem gelado (brancos, rosés, espumantes e alguns tintos leves). " +
+    "temperatura = faixa em °C (ex.: '16–18 °C'). harmonizacao = pratos que combinam (frase curta). queijos = queijos que combinam. " +
+    "descricao = 2 a 3 frases simpáticas e claras pro cliente, descrevendo o estilo REAL (frutado, amadeirado, herbáceo, macio, adstringente…). " +
+    "IMPORTANTE: seja fiel ao estilo — NÃO diga que é frutado se o estilo não for; muitos vinhos são pouco frutados, mais adstringentes ou amadeirados. " +
+    "combina_se_voce_gosta = complete a frase 'Combina se você gosta…' (ex.: 'de tinto encorpado para churrasco'). " +
+    "Preencha 'uva' só se tiver segurança pelo nome; senão deixe ''. NÃO invente safra, teor alcoólico, país nem região (não estão nesta ficha). " +
+    "Se não conhecer o rótulo exato, faça a melhor estimativa pelo estilo indicado no nome/uva/tipo. Contexto — " + ctx;
+  const body = { contents: [{ parts: [{ text: instrucao }] }], generationConfig: { temperature: 0.3, responseMimeType: "application/json" } };
+  const resp = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const json = await resp.json();
+  if (json.error) throw new Error(json.error.message || "erro da IA");
+  const texto = json.candidates && json.candidates[0] && json.candidates[0].content
+    && json.candidates[0].content.parts && json.candidates[0].content.parts[0].text;
+  if (!texto) throw new Error("a IA não respondeu");
+  let d; try { d = JSON.parse(texto); } catch (_) { throw new Error("resposta da IA fora do formato"); }
+  return d;
+}
 
 function abrirModalGuia(v) {
   const f = $("#form-guia");
@@ -1483,6 +1527,34 @@ function vincularCodigoGuia() {
   const it = (DADOS.estoque || []).find((e) => normTexto(e.nome) === alvo && alvo);
   if (it && it.codigo) f.codigo.value = it.codigo;
 }
+
+// Preencher a ficha do guia por IA (o humano só revisa e ajusta depois).
+$("#btn-guia-ia").addEventListener("click", async () => {
+  const f = $("#form-guia");
+  if (!f.nome.value.trim()) { toast("Escreva o nome do vinho primeiro"); f.nome.focus(); return; }
+  if (!GEMINI_KEY) { toast("Configure a chave da IA na engrenagem ⚙ primeiro"); $("#btn-config").click(); return; }
+  const btn = $("#btn-guia-ia");
+  const orig = btn.textContent; btn.disabled = true; btn.textContent = "✨ Consultando…";
+  try {
+    const d = await preencherGuiaIA({ nome: f.nome.value.trim(), produtor: f.produtor.value.trim(), tipo: f.tipo.value, uva: f.uva.value.trim(), pais: f.pais.value.trim() });
+    // Textos: só preenche os campos VAZIOS (preserva o que você já digitou).
+    const soVazio = (campo, val) => { if (f[campo] && !f[campo].value.trim() && val) f[campo].value = String(val); };
+    if (d.tipo && ["Tinto", "Branco", "Rosé", "Espumante"].includes(d.tipo)) f.tipo.value = d.tipo;
+    soVazio("uva", d.uva);
+    soVazio("temperatura", d.temperatura);
+    soVazio("harmonizacao", d.harmonizacao);
+    soVazio("queijos", d.queijos);
+    soVazio("descricao", d.descricao);
+    soVazio("combina_se_voce_gosta", d.combina_se_voce_gosta);
+    if (typeof d.gelavel === "boolean") f.gelavel.checked = d.gelavel;
+    setEscalasGuia(d); // as 4 notas sensoriais sempre atualizam (estimativa da IA)
+    toast("Preenchido pela IA ✓ — revise e ajuste antes de salvar");
+  } catch (err) {
+    console.error(err); toast("Não consegui preencher: " + (err.message || "tente de novo"));
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
+});
 
 $("#form-guia").addEventListener("submit", async (e) => {
   e.preventDefault();
