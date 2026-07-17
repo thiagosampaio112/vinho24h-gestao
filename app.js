@@ -82,6 +82,33 @@ async function apiPost(action, payload) {
   return json;
 }
 
+// --- Fila de sincronização (UI otimista) ---------------------------------
+// A tela é atualizada NA HORA (estado local) e a escrita vai pro backend em
+// SEGUNDO PLANO. A fila é serial → preserva a ordem das ações (ex.: +/-/+
+// numa quantidade chega ao servidor na sequência certa). Se uma escrita falha,
+// a gente avisa e recarrega do servidor pra realinhar (auto-cura).
+let _filaSync = Promise.resolve();
+let _syncPendentes = 0;
+function marcarSync() {
+  const el = document.getElementById("sync-ind");
+  if (el) el.classList.toggle("hidden", _syncPendentes === 0);
+}
+function enfileirar(action, payload) {
+  _syncPendentes++; marcarSync();
+  const run = _filaSync.then(() => apiPost(action, payload));
+  _filaSync = run.catch(() => {}); // a fila não trava se um item falhar
+  run.finally(() => { _syncPendentes--; marcarSync(); });
+  return run;
+}
+// Escrita frequente: dispara em 2º plano; se falhar, recarrega do servidor.
+function sincronizarFundo(action, payload) {
+  enfileirar(action, payload).catch(async (err) => {
+    console.error("sync falhou:", action, err);
+    toast("⚠ Não consegui salvar na nuvem — recarregando os dados");
+    try { await carregar(); renderAtual(); } catch (_) {}
+  });
+}
+
 function lerLocal() {
   try { const s = localStorage.getItem(LS_KEY); if (s) return JSON.parse(s); } catch (_) {}
   return null;
@@ -91,9 +118,15 @@ function gravarLocal() { try { localStorage.setItem(LS_KEY, JSON.stringify(DADOS
 async function carregar() {
   if (online()) {
     DADOS = await apiGet();
-  } else {
-    DADOS = lerLocal() || SEED();
+    normalizarDados();
+    gravarLocal(); // guarda uma cópia local p/ abrir instantâneo na próxima (cache-first)
+    return;
   }
+  DADOS = lerLocal() || SEED();
+  normalizarDados();
+}
+// Garante que todos os campos-lista existem (evita erro ao ler cache antigo/parcial).
+function normalizarDados() {
   DADOS.estoque = DADOS.estoque || []; DADOS.compras = DADOS.compras || []; DADOS.fornecedores = DADOS.fornecedores || [];
   DADOS.vigiados = DADOS.vigiados || []; DADOS.precos = DADOS.precos || []; DADOS.lojas = DADOS.lojas || [];
   DADOS.pdvs = DADOS.pdvs || []; DADOS.pdvEstoque = DADOS.pdvEstoque || []; DADOS.vendas = DADOS.vendas || [];
@@ -133,43 +166,40 @@ function novoSku(nome) {
   return sku;
 }
 
-// --- Operações (roteiam para API ou local) ---
+// --- Operações (UI otimista: muta o estado local NA HORA + sincroniza em 2º
+//     plano quando online; no demo o local já é a fonte da verdade) ---
 async function salvarItem(item, skuOriginal) {
   if (!item.sku) item.sku = novoSku(item.nome);
-  if (online()) { await apiPost("salvarItem", { item, skuOriginal }); }
-  else {
-    const lista = DADOS.estoque;
-    const idx = lista.findIndex((x) => x.sku === (skuOriginal || item.sku));
-    if (idx >= 0) lista[idx] = { ...lista[idx], ...item }; else lista.push(item);
-    registrarFornecedor(item.fornecedor); gravarLocal();
-  }
+  const lista = DADOS.estoque;
+  const idx = lista.findIndex((x) => x.sku === (skuOriginal || item.sku));
+  if (idx >= 0) lista[idx] = { ...lista[idx], ...item }; else lista.push(item);
+  registrarFornecedor(item.fornecedor); gravarLocal();
+  if (online()) sincronizarFundo("salvarItem", { item, skuOriginal });
 }
 async function excluirItem(sku) {
-  if (online()) { await apiPost("excluirItem", { sku }); }
-  else { DADOS.estoque = DADOS.estoque.filter((x) => x.sku !== sku); gravarLocal(); }
+  DADOS.estoque = DADOS.estoque.filter((x) => x.sku !== sku); gravarLocal();
+  if (online()) sincronizarFundo("excluirItem", { sku });
 }
 async function registrarCompra(compra) {
-  if (online()) { await apiPost("registrarCompra", { compra }); }
-  else {
-    DADOS.compras.unshift(compra);
-    // A compra entra na RETAGUARDA do rótulo. Casa pelo sku (quando veio da
-    // conferência da nota) e, se não, pelo nome. Cria o rótulo se não existir.
-    let item = compra.sku ? DADOS.estoque.find((x) => x.sku === compra.sku) : null;
-    if (!item) item = DADOS.estoque.find((x) => x.nome.toLowerCase() === compra.nome.toLowerCase());
-    if (item) {
-      item.qtd = (Number(item.qtd) || 0) + Number(compra.qtd);
-      if (compra.precoUnit) item.precoAquisicao = compra.precoUnit;
-      if (compra.fornecedor) item.fornecedor = compra.fornecedor;
-      if (compra.data) item.dataCompra = compra.data;
-      if (compra.codigoBarras && !item.codigoBarras) item.codigoBarras = compra.codigoBarras;
-    } else {
-      DADOS.estoque.push({ sku: compra.sku || novoSku(compra.nome), nome: compra.nome, tipo: "Tinto", uva: "", produtor: "",
-        qtd: Number(compra.qtd), minimo: 3, precoAquisicao: compra.precoUnit || 0, precoVenda: 0,
-        codigo: "", codigoBarras: compra.codigoBarras || "", categoria: "",
-        fornecedor: compra.fornecedor || "", dataCompra: compra.data || "", obs: "" });
-    }
-    registrarFornecedor(compra.fornecedor); gravarLocal();
+  DADOS.compras.unshift(compra);
+  // A compra entra na RETAGUARDA do rótulo. Casa pelo sku (quando veio da
+  // conferência da nota) e, se não, pelo nome. Cria o rótulo se não existir.
+  let item = compra.sku ? DADOS.estoque.find((x) => x.sku === compra.sku) : null;
+  if (!item) item = DADOS.estoque.find((x) => x.nome.toLowerCase() === compra.nome.toLowerCase());
+  if (item) {
+    item.qtd = (Number(item.qtd) || 0) + Number(compra.qtd);
+    if (compra.precoUnit) item.precoAquisicao = compra.precoUnit;
+    if (compra.fornecedor) item.fornecedor = compra.fornecedor;
+    if (compra.data) item.dataCompra = compra.data;
+    if (compra.codigoBarras && !item.codigoBarras) item.codigoBarras = compra.codigoBarras;
+  } else {
+    DADOS.estoque.push({ sku: compra.sku || novoSku(compra.nome), nome: compra.nome, tipo: "Tinto", uva: "", produtor: "",
+      qtd: Number(compra.qtd), minimo: 3, precoAquisicao: compra.precoUnit || 0, precoVenda: 0,
+      codigo: "", codigoBarras: compra.codigoBarras || "", categoria: "",
+      fornecedor: compra.fornecedor || "", dataCompra: compra.data || "", obs: "" });
   }
+  registrarFornecedor(compra.fornecedor); gravarLocal();
+  if (online()) sincronizarFundo("registrarCompra", { compra });
 }
 function registrarFornecedor(nome) {
   nome = (nome || "").trim(); if (!nome) return;
@@ -177,8 +207,9 @@ function registrarFornecedor(nome) {
 }
 
 async function excluirCompra(compra) {
-  if (online()) { await apiPost("excluirCompra", { linha: compra.__row }); }
-  else { const i = DADOS.compras.indexOf(compra); if (i >= 0) DADOS.compras.splice(i, 1); gravarLocal(); }
+  const linha = compra.__row;
+  const i = DADOS.compras.indexOf(compra); if (i >= 0) DADOS.compras.splice(i, 1); gravarLocal();
+  if (online()) sincronizarFundo("excluirCompra", { linha });
 }
 
 // --- Lojas de confiança (radar de preço, Fase 3B) ---
@@ -187,17 +218,15 @@ function siteDe(url) { const m = String(url || "").match(/^https?:\/\/([^/]+)/i)
 async function salvarLoja(loja, urlOriginal) {
   if (!loja.nome) loja.nome = siteDe(loja.url);
   if (!loja.ativo) loja.ativo = "sim";
-  if (online()) { await apiPost("salvarLoja", { loja, urlOriginal }); }
-  else {
-    const alvo = urlOriginal || loja.url;
-    const idx = DADOS.lojas.findIndex((l) => l.url === alvo);
-    if (idx >= 0) DADOS.lojas[idx] = { ...DADOS.lojas[idx], ...loja }; else DADOS.lojas.push(loja);
-    gravarLocal();
-  }
+  const alvo = urlOriginal || loja.url;
+  const idx = DADOS.lojas.findIndex((l) => l.url === alvo);
+  if (idx >= 0) DADOS.lojas[idx] = { ...DADOS.lojas[idx], ...loja }; else DADOS.lojas.push(loja);
+  gravarLocal();
+  if (online()) sincronizarFundo("salvarLoja", { loja, urlOriginal });
 }
 async function excluirLoja(url) {
-  if (online()) { await apiPost("excluirLoja", { url }); }
-  else { DADOS.lojas = DADOS.lojas.filter((l) => l.url !== url); gravarLocal(); }
+  DADOS.lojas = DADOS.lojas.filter((l) => l.url !== url); gravarLocal();
+  if (online()) sincronizarFundo("excluirLoja", { url });
 }
 
 // --- Guia do QR (o app edita; a planilha do guia é escrita pelo backend) ---
@@ -210,17 +239,15 @@ function gerarIdGuia(nome) {
 }
 async function salvarVinhoGuia(vinho, idOriginal) {
   if (!vinho.id) vinho.id = gerarIdGuia(vinho.nome);
-  if (online()) { await apiPost("salvarVinhoGuia", { vinho, idOriginal }); }
-  else {
-    const alvo = idOriginal || vinho.id;
-    const idx = DADOS.guia.findIndex((x) => x.id === alvo);
-    if (idx >= 0) DADOS.guia[idx] = { ...DADOS.guia[idx], ...vinho }; else DADOS.guia.push(vinho);
-    gravarLocal();
-  }
+  const alvo = idOriginal || vinho.id;
+  const idx = DADOS.guia.findIndex((x) => x.id === alvo);
+  if (idx >= 0) DADOS.guia[idx] = { ...DADOS.guia[idx], ...vinho }; else DADOS.guia.push(vinho);
+  gravarLocal();
+  if (online()) sincronizarFundo("salvarVinhoGuia", { vinho, idOriginal });
 }
 async function excluirVinhoGuia(id) {
-  if (online()) { await apiPost("excluirVinhoGuia", { id }); }
-  else { DADOS.guia = DADOS.guia.filter((x) => x.id !== id); gravarLocal(); }
+  DADOS.guia = DADOS.guia.filter((x) => x.id !== id); gravarLocal();
+  if (online()) sincronizarFundo("excluirVinhoGuia", { id });
 }
 
 // ======================================================================
@@ -265,27 +292,24 @@ function casarRotulo(linha) {
 // Abastecer a adega: tira da retaguarda (qtd) e põe no PDV.
 async function abastecerPdv(sku, pdv, qtd) {
   qtd = Number(qtd) || 0; if (qtd <= 0) return;
-  if (online()) { await apiPost("abastecerPdv", { sku, pdv, qtd }); }
-  else {
-    const item = DADOS.estoque.find((x) => x.sku === sku); if (!item) return;
-    item.qtd = Math.max(0, (Number(item.qtd) || 0) - qtd);
-    garantirLinhaPdv(sku, pdv).qtd += qtd;
-    gravarLocal();
-  }
+  const item = DADOS.estoque.find((x) => x.sku === sku); if (!item) return;
+  item.qtd = Math.max(0, (Number(item.qtd) || 0) - qtd);
+  garantirLinhaPdv(sku, pdv).qtd += qtd;
+  gravarLocal();
+  if (online()) sincronizarFundo("abastecerPdv", { sku, pdv, qtd });
 }
 // Ajuste direto da quantidade na adega (correção manual, +/−).
 async function ajustarPdv(sku, pdv, delta) {
-  const atual = qtdNoPdv(sku, pdv);
-  const nova = Math.max(0, atual + delta);
-  if (online()) { await apiPost("ajustarPdv", { sku, pdv, qtd: nova }); garantirLinhaPdv(sku, pdv).qtd = nova; }
-  else { garantirLinhaPdv(sku, pdv).qtd = nova; gravarLocal(); }
+  const nova = Math.max(0, qtdNoPdv(sku, pdv) + delta);
+  garantirLinhaPdv(sku, pdv).qtd = nova; gravarLocal();
+  if (online()) sincronizarFundo("ajustarPdv", { sku, pdv, qtd: nova });
 }
 // Ajuste direto da retaguarda (+/−).
 async function ajustarQtd(sku, delta) {
   const item = DADOS.estoque.find((x) => x.sku === sku); if (!item) return;
   const nova = Math.max(0, (Number(item.qtd) || 0) + delta);
-  if (online()) { await apiPost("ajustarQtd", { sku, qtd: nova }); item.qtd = nova; }
-  else { item.qtd = nova; gravarLocal(); }
+  item.qtd = nova; gravarLocal();
+  if (online()) sincronizarFundo("ajustarQtd", { sku, qtd: nova });
 }
 
 // ======================================================================
@@ -294,7 +318,9 @@ async function ajustarQtd(sku, delta) {
 //             = [{ sku, novo, rotulo:{...}, qtd, precoMedio, valorVendido, ... }] (vendas)
 // ======================================================================
 async function aplicarImportPlanograma(pdv, resolvidos) {
-  if (online()) { await apiPost("importarPlanograma", { pdv, itens: resolvidos }); return; }
+  // Import é pesado e faz casamento/dedup no backend → mantemos AGUARDADO e
+  // autoritativo (o caller recarrega do servidor). Vai pela mesma fila serial.
+  if (online()) { await enfileirar("importarPlanograma", { pdv, itens: resolvidos }); return; }
   resolvidos.forEach((r) => {
     let item = DADOS.estoque.find((x) => x.sku === r.sku);
     if (!item) { item = { sku: r.sku, tipo: "Tinto", uva: "", produtor: "", qtd: 0, minimo: 0, precoAquisicao: 0, fornecedor: "", dataCompra: "", obs: "" }; DADOS.estoque.push(item); }
@@ -315,7 +341,7 @@ async function aplicarImportPlanograma(pdv, resolvidos) {
 }
 
 async function aplicarImportVendas(periodo, pdv, resolvidos) {
-  if (online()) { await apiPost("importarVendas", { periodoInicio: periodo.inicio, periodoFim: periodo.fim, pdv, itens: resolvidos }); return; }
+  if (online()) { await enfileirar("importarVendas", { periodoInicio: periodo.inicio, periodoFim: periodo.fim, pdv, itens: resolvidos }); return; }
   const hoje = hojeISO();
   resolvidos.forEach((r) => {
     let item = DADOS.estoque.find((x) => x.sku === r.sku);
@@ -331,18 +357,18 @@ async function aplicarImportVendas(periodo, pdv, resolvidos) {
 
 // Exclui UMA venda do histórico e DEVOLVE a quantidade à adega (desfaz o desconto).
 async function excluirVenda(venda) {
-  if (online()) { await apiPost("excluirVenda", { venda }); }
-  else {
-    const i = DADOS.vendas.indexOf(venda);
-    if (i >= 0) DADOS.vendas.splice(i, 1);
-    if (venda.sku) garantirLinhaPdv(venda.sku, venda.pdv).qtd += Number(venda.qtd) || 0;
-    gravarLocal();
-  }
+  const i = DADOS.vendas.indexOf(venda);
+  if (i >= 0) DADOS.vendas.splice(i, 1);
+  if (venda.sku) garantirLinhaPdv(venda.sku, venda.pdv).qtd += Number(venda.qtd) || 0;
+  gravarLocal();
+  if (online()) sincronizarFundo("excluirVenda", { venda });
 }
 // Exclui TODAS as vendas de um período (pdv+início+fim) e devolve à adega.
+// Aguardado (via fila) porque é usado na SUBSTITUIÇÃO de período no import:
+// se a remoção falhar, o import não roda (evita duplicar no servidor).
 async function excluirVendasPeriodo(pdv, inicio, fim) {
   const alvo = DADOS.vendas.filter((v) => v.pdv === pdv && v.periodoInicio === inicio && v.periodoFim === fim);
-  if (online()) { await apiPost("excluirVendasPeriodo", { pdv, periodoInicio: inicio, periodoFim: fim }); }
+  if (online()) { await enfileirar("excluirVendasPeriodo", { pdv, periodoInicio: inicio, periodoFim: fim }); }
   else {
     alvo.forEach((v) => { if (v.sku) garantirLinhaPdv(v.sku, v.pdv).qtd += Number(v.qtd) || 0; });
     DADOS.vendas = DADOS.vendas.filter((v) => !(v.pdv === pdv && v.periodoInicio === inicio && v.periodoFim === fim));
@@ -1110,7 +1136,7 @@ $("#btn-conf-plano-salvar").addEventListener("click", async () => {
   }));
   if (!resolvidos.length) { toast("Marque ao menos um produto"); return; }
   await comProgresso(() => aplicarImportPlanograma(pdv, resolvidos));
-  fechar("#modal-conf-plano"); pdvAtual = pdv; await recarregar(); irPara("estoque");
+  fechar("#modal-conf-plano"); pdvAtual = pdv; await recarregarDoServidor(); irPara("estoque");
   toast(`Planograma importado ✓ (${resolvidos.length} produtos)`);
 });
 
@@ -1229,7 +1255,7 @@ $("#btn-conf-vendas-salvar").addEventListener("click", async () => {
     if (exato) await excluirVendasPeriodo(pdv, exato.inicio, exato.fim); // substitui: remove o antigo e devolve à adega
     await aplicarImportVendas(periodo, pdv, resolvidos);
   });
-  fechar("#modal-conf-vendas"); pdvAtual = pdv; await recarregar(); irPara("giro");
+  fechar("#modal-conf-vendas"); pdvAtual = pdv; await recarregarDoServidor(); irPara("giro");
   toast(exato ? `Período substituído ✓ (${resolvidos.length} rótulos)` : `Vendas importadas ✓ (${resolvidos.length} rótulos)`);
 });
 
@@ -1299,7 +1325,7 @@ function renderGiro() {
       const n = per.linhas.length;
       if (!confirm(`Excluir as ${n} ${n === 1 ? "venda" : "vendas"} deste período?\n(${escaparHtml(per.pdv)} · ${dataBR(per.inicio)}–${dataBR(per.fim)})\n\nAs garrafas voltam para a adega.`)) return;
       await comProgresso(() => excluirVendasPeriodo(per.pdv, per.inicio, per.fim));
-      giroPeriodo = null; await recarregar(); toast("Período de vendas excluído");
+      giroPeriodo = null; await recarregarDoServidor(); toast("Período de vendas excluído");
     };
   }
   const linhas = per.linhas.slice().sort((a, b) => (Number(b.qtd) || 0) - (Number(a.qtd) || 0));
@@ -1859,8 +1885,8 @@ async function comProgresso(fn) {
   try { await fn(); }
   catch (err) { console.error(err); toast("Erro: " + (err.message || "tente de novo")); throw err; }
 }
-async function recarregar() {
-  if (online()) await carregar();
+// Re-renderiza a aba atual a partir do estado local (instantâneo).
+function renderAtual() {
   const btn = $(".nav-btn[data-aba].ativo");
   const aba = btn ? btn.dataset.aba : "estoque";
   if (aba === "compras") renderCompras();
@@ -1869,6 +1895,18 @@ async function recarregar() {
   else if (aba === "guia") renderGuia();
   else renderEstoque();
   atualizarDatalists();
+}
+// Depois de uma escrita otimista, só re-renderiza (os dados locais já mudaram).
+// A sincronização com o servidor acontece em 2º plano (ver sincronizarFundo).
+async function recarregar() { renderAtual(); }
+// Força buscar do servidor (usado após imports pesados). Espera a fila drenar
+// pra não ler dados no meio de uma escrita pendente.
+async function recarregarDoServidor() {
+  if (online()) {
+    try { await _filaSync; await carregar(); }
+    catch (e) { console.error(e); toast("Não consegui atualizar do servidor"); }
+  }
+  renderAtual();
 }
 
 // Escape para conteúdo vindo de fora (links/nomes) usado com innerHTML.
@@ -1891,9 +1929,19 @@ async function iniciar() {
   marcarModo();
   montarFiltros();
   montarFiltrosOfertas();
-  try { await carregar(); }
-  catch (err) { console.error(err); toast("Não consegui ler a planilha — confira o SETUP."); DADOS = lerLocal() || SEED(); }
+  // CACHE-FIRST: mostra NA HORA o que estava salvo no aparelho...
+  const cache = lerLocal();
+  DADOS = cache || SEED();
+  normalizarDados();
   irPara("estoque");
+  // ...e atualiza do servidor em 2º plano (se online). A tela re-renderiza sozinha.
+  if (online()) {
+    try { await carregar(); renderAtual(); }
+    catch (err) {
+      console.error(err);
+      toast(cache ? "Sem conexão agora — mostrando os dados salvos" : "Não consegui ler a planilha — confira o SETUP.");
+    }
+  }
 }
 
 // Service worker (PWA / offline)
