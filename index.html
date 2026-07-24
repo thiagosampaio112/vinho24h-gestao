@@ -157,8 +157,12 @@
         </div>
         <div class="form-linha">
           <label>Código do sistema <input name="codigo" placeholder="Ex.: 01022 (opcional)" /></label>
-          <label>Preço de venda (R$) <input name="precoVenda" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00" /></label>
+          <label>Preço de venda padrão (R$) <input name="precoVenda" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00" /></label>
         </div>
+        <div class="form-linha">
+          <label>Preço nesta adega (R$) <input name="precoVendaPdv" type="number" min="0" step="0.01" inputmode="decimal" placeholder="usa o padrão" /></label>
+        </div>
+        <p class="dica" id="item-preco-adega-dica"></p>
         <div class="form-linha">
           <label>Retaguarda (un.) <input name="qtd" type="number" min="0" step="1" value="0" inputmode="numeric" /></label>
           <label>Alerta abaixo de <input name="minimo" type="number" min="0" step="1" value="3" inputmode="numeric" /></label>

@@ -39,7 +39,7 @@ var COL_FORNECEDORES = ["nome","contato","obs"];
 var COL_PRECOS = ["data","consulta","achado","preco","url","site"];
 var COL_LOJAS = ["nome","url","ativo"];
 var COL_PDVS = ["nome","ativo","obs"];
-var COL_PDV_ESTOQUE = ["pdv","sku","qtd","minimo","nivelPar"];
+var COL_PDV_ESTOQUE = ["pdv","sku","qtd","minimo","nivelPar","precoVenda"];
 var COL_VENDAS = ["periodoInicio","periodoFim","importadoEm","pdv","sku","codigo","descricao","categoria","qtd","precoMedio","valorVendido"];
 
 // ---------------------------------------------------------------- utilidades
@@ -120,7 +120,7 @@ function doGet(e) {
     var lojas = _lerAba(ABA_LOJAS, COL_LOJAS);
     var pdvs = _lerAba(ABA_PDVS, COL_PDVS);
     var pdvEstoque = _lerAba(ABA_PDV_ESTOQUE, COL_PDV_ESTOQUE).map(function (r) {
-      r.qtd = _num(r.qtd); r.minimo = _num(r.minimo); r.nivelPar = _num(r.nivelPar); return r;
+      r.qtd = _num(r.qtd); r.minimo = _num(r.minimo); r.nivelPar = _num(r.nivelPar); r.precoVenda = _num(r.precoVenda); return r;
     });
     var vendas = _lerAba(ABA_VENDAS, COL_VENDAS).map(function (r) {
       r.qtd = _num(r.qtd); r.precoMedio = _num(r.precoMedio); r.valorVendido = _num(r.valorVendido);
@@ -157,6 +157,7 @@ function doPost(e) {
       case "salvarPdv":        r = salvarPdv(body.pdv, body.nomeOriginal); break;
       case "abastecerPdv":     r = abastecerPdv(body.sku, body.pdv, body.qtd); break;
       case "ajustarPdv":       r = ajustarPdv(body.sku, body.pdv, body.qtd); break;
+      case "ajustarPrecoPdv":  r = ajustarPrecoPdv(body.sku, body.pdv, body.preco); break;
       case "importarPlanograma": r = importarPlanograma(body.pdv, body.itens); break;
       case "importarVendas":   r = importarVendas(body.periodoInicio, body.periodoFim, body.pdv, body.itens); break;
       case "excluirVenda":     r = excluirVenda(body.venda); break;
@@ -353,6 +354,13 @@ function ajustarPdv(sku, pdv, qtd) {
   return { ok: true };
 }
 
+// Preço de venda de um rótulo NESTA adega (por PDV).
+function ajustarPrecoPdv(sku, pdv, preco) {
+  _garantePdv(pdv);
+  _setPdvEstoque(pdv, sku, { precoVenda: Math.max(0, _num(preco)) });
+  return { ok: true };
+}
+
 // Importar planograma: acerta a adega com a posição do sistema + cadastra rótulos
 // novos. itens = [{ sku, novo, rotulo:{...}, quantAtual, minimo, nivelPar }].
 function importarPlanograma(pdv, itens) {
@@ -373,13 +381,16 @@ function importarPlanograma(pdv, itens) {
       mapE[sku] = e; est.push(e);
     } else {
       if (d.nome) e.nome = d.nome; if (d.codigo) e.codigo = d.codigo; if (d.codigoBarras) e.codigoBarras = d.codigoBarras;
-      if (d.categoria) e.categoria = d.categoria; if (d.tipo) e.tipo = d.tipo; if (d.precoVenda) e.precoVenda = _num(d.precoVenda);
+      if (d.categoria) e.categoria = d.categoria; if (d.tipo) e.tipo = d.tipo;
+      // NÃO sobrescreve o precoVenda do rótulo (é só o "padrão"); o preço do
+      // planograma vai para a ADEGA (pdvEstoque), pois é por máquina.
     }
     var key = pdv + "||" + sku, p = mapP[key];
-    if (!p) { p = { pdv: pdv, sku: sku, qtd: 0, minimo: 0, nivelPar: 0 }; mapP[key] = p; pdvRows.push(p); }
+    if (!p) { p = { pdv: pdv, sku: sku, qtd: 0, minimo: 0, nivelPar: 0, precoVenda: 0 }; mapP[key] = p; pdvRows.push(p); }
     p.qtd = _num(it.quantAtual);
     if (it.minimo != null) p.minimo = _num(it.minimo);
     if (it.nivelPar != null) p.nivelPar = _num(it.nivelPar);
+    if (d.precoVenda != null && d.precoVenda !== "") p.precoVenda = _num(d.precoVenda); // preço DESTA adega
   });
   _regravaAba(shE, COL_ESTOQUE, est);
   _regravaAba(shP, COL_PDV_ESTOQUE, pdvRows);

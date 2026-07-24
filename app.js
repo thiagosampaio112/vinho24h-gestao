@@ -136,7 +136,7 @@ function normalizarDados() {
   const ativas = pdvsAtivos();
   if (!pdvAtual || !ativas.some((p) => p.nome === pdvAtual)) pdvAtual = (ativas[0] || DADOS.pdvs[0]).nome;
   // Normaliza números das linhas de PDV.
-  DADOS.pdvEstoque.forEach((r) => { r.qtd = Number(r.qtd) || 0; r.minimo = Number(r.minimo) || 0; r.nivelPar = Number(r.nivelPar) || 0; });
+  DADOS.pdvEstoque.forEach((r) => { r.qtd = Number(r.qtd) || 0; r.minimo = Number(r.minimo) || 0; r.nivelPar = Number(r.nivelPar) || 0; r.precoVenda = Number(r.precoVenda) || 0; });
 }
 
 // --- Ajudantes de PDV (ponto de venda / adega) ---
@@ -152,8 +152,17 @@ function minimoPdv(sku, pdv) { const r = linhaPdv(sku, pdv); return r ? (Number(
 // Garante (e devolve) a linha de PDV de um rótulo numa adega, no estado local.
 function garantirLinhaPdv(sku, pdv) {
   let r = linhaPdv(sku, pdv);
-  if (!r) { r = { pdv, sku, qtd: 0, minimo: 0, nivelPar: 0 }; DADOS.pdvEstoque.push(r); }
+  if (!r) { r = { pdv, sku, qtd: 0, minimo: 0, nivelPar: 0, precoVenda: 0 }; DADOS.pdvEstoque.push(r); }
   return r;
+}
+// Preço de venda efetivo de um rótulo NA adega: o preço da adega se houver,
+// senão o "preço padrão" do rótulo (fallback).
+function precoVendaNoPdv(sku, pdv) {
+  const r = linhaPdv(sku, pdv);
+  const pv = r ? (Number(r.precoVenda) || 0) : 0;
+  if (pv > 0) return pv;
+  const it = DADOS.estoque.find((x) => x.sku === sku);
+  return it ? (Number(it.precoVenda) || 0) : 0;
 }
 
 // Gera um SKU simples quando o item não tem um.
@@ -303,6 +312,12 @@ async function ajustarPdv(sku, pdv, delta) {
   garantirLinhaPdv(sku, pdv).qtd = nova; gravarLocal();
   if (online()) sincronizarFundo("ajustarPdv", { sku, pdv, qtd: nova });
 }
+// Preço de venda de um rótulo NESTA adega (por PDV).
+async function ajustarPrecoPdv(sku, pdv, preco) {
+  preco = Math.max(0, Number(preco) || 0);
+  garantirLinhaPdv(sku, pdv).precoVenda = preco; gravarLocal();
+  if (online()) sincronizarFundo("ajustarPrecoPdv", { sku, pdv, preco });
+}
 // Ajuste direto da retaguarda (+/−).
 async function ajustarQtd(sku, delta) {
   const item = DADOS.estoque.find((x) => x.sku === sku); if (!item) return;
@@ -348,7 +363,8 @@ async function aplicarImportPlanograma(pdv, resolvidos) {
   if (online()) { await enfileirar("importarPlanograma", { pdv, itens: resolvidos }); return; }
   resolvidos.forEach((r) => {
     let item = DADOS.estoque.find((x) => x.sku === r.sku);
-    if (!item) { item = { sku: r.sku, tipo: "Tinto", uva: "", produtor: "", qtd: 0, minimo: 0, precoAquisicao: 0, fornecedor: "", dataCompra: "", obs: "" }; DADOS.estoque.push(item); }
+    const novo = !item;
+    if (!item) { item = { sku: r.sku, tipo: "Tinto", uva: "", produtor: "", qtd: 0, minimo: 0, precoAquisicao: 0, precoVenda: 0, fornecedor: "", dataCompra: "", obs: "" }; DADOS.estoque.push(item); }
     // Atualiza o cadastro com o que veio do sistema (sem tocar no seu custo/fornecedor).
     const d = r.rotulo || {};
     if (d.nome) item.nome = d.nome;
@@ -356,11 +372,14 @@ async function aplicarImportPlanograma(pdv, resolvidos) {
     if (d.codigoBarras) item.codigoBarras = d.codigoBarras;
     if (d.categoria) item.categoria = d.categoria;
     if (d.tipo) item.tipo = d.tipo;
-    if (d.precoVenda) item.precoVenda = Number(d.precoVenda) || 0;
+    // Preço do planograma é por ADEGA (por máquina) → vai pra linha do PDV.
+    // No rótulo, só seta o "padrão" quando o rótulo é NOVO (não atropela depois).
+    if (novo && d.precoVenda) item.precoVenda = Number(d.precoVenda) || 0;
     const linha = garantirLinhaPdv(r.sku, pdv);
     linha.qtd = Number(r.quantAtual) || 0;
     if (r.minimo != null) linha.minimo = Number(r.minimo) || 0;
     if (r.nivelPar != null) linha.nivelPar = Number(r.nivelPar) || 0;
+    if (d.precoVenda != null && d.precoVenda !== "") linha.precoVenda = Number(d.precoVenda) || 0;
   });
   gravarLocal();
 }
@@ -511,10 +530,11 @@ function renderEstoque() {
     const item = el("div", "item" + (repor ? " baixo" : "") + (sel ? " selecionado" : ""));
     const naAdega = qtdNoPdv(v.sku, pdvAtual);
     const retag = Number(v.qtd) || 0;
-    const margem = (Number(v.precoVenda) || 0) - (Number(v.precoAquisicao) || 0);
-    const metaPreco = v.precoVenda ? `<span>Venda: <b>${brl(v.precoVenda)}</b></span>` : "";
+    const precoVendaAdega = precoVendaNoPdv(v.sku, pdvAtual);
+    const margem = precoVendaAdega - (Number(v.precoAquisicao) || 0);
+    const metaPreco = precoVendaAdega ? `<span>Venda: <b>${brl(precoVendaAdega)}</b></span>` : "";
     const metaCusto = v.precoAquisicao ? `<span>Custo: <b>${brl(v.precoAquisicao)}</b></span>` : "";
-    const metaMargem = (v.precoVenda && v.precoAquisicao)
+    const metaMargem = (precoVendaAdega && v.precoAquisicao)
       ? `<span class="${margem >= 0 ? "lucro" : "prejuizo"}">Margem: <b>${brl(margem)}</b></span>`
       : `<span>Fornec.: <b>${escaparHtml(v.fornecedor || "—")}</b></span>`;
     item.innerHTML = `
@@ -835,7 +855,11 @@ function abrirModalItem(item) {
     f.obs.value = item.obs || "";
     if (f.codigo) f.codigo.value = item.codigo || "";
     if (f.precoVenda) f.precoVenda.value = item.precoVenda || "";
+    // Preço específico DESTA adega (se houver um definido; senão fica vazio = usa o padrão).
+    if (f.precoVendaPdv) { const lp = linhaPdv(item.sku, pdvAtual); f.precoVendaPdv.value = (lp && lp.precoVenda > 0) ? lp.precoVenda : ""; }
   } else { f.dataCompra.value = hojeISO(); }
+  const dica = $("#item-preco-adega-dica");
+  if (dica) dica.textContent = `Preço só para a adega "${pdvAtual}". Deixe vazio para usar o preço padrão.`;
   atualizarDatalists();
   abrir("#modal-item");
 }
@@ -857,7 +881,13 @@ $("#form-item").addEventListener("submit", async (e) => {
   };
   delete item.__row;
   if (!item.nome) return;
-  await comProgresso(() => salvarItem(item, f.sku_original.value || null));
+  await comProgresso(async () => {
+    await salvarItem(item, f.sku_original.value || null);
+    // Preço específico da adega atual: aplica se preencheu, ou se havia um e foi limpo (volta ao padrão).
+    const precoPdvVal = f.precoVendaPdv ? f.precoVendaPdv.value.trim() : "";
+    const overrideAtual = (linhaPdv(item.sku, pdvAtual) || {}).precoVenda || 0;
+    if (precoPdvVal !== "" || overrideAtual > 0) await ajustarPrecoPdv(item.sku, pdvAtual, Number(precoPdvVal) || 0);
+  });
   fechar("#modal-item"); await recarregar(); toast("Garrafa salva ✓");
 });
 
