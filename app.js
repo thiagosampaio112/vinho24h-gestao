@@ -966,9 +966,11 @@ async function lerNotaIA(base64, mime) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODELO_IA}:generateContent?key=${encodeURIComponent(GEMINI_KEY)}`;
   const instrucao =
     "Esta é uma nota fiscal ou cupom de compra de vinhos/bebidas. Extraia os itens comprados. " +
-    "Responda em JSON no formato: {\"fornecedor\":\"\",\"data\":\"AAAA-MM-DD\",\"itens\":[{\"nome\":\"\",\"codigoBarras\":\"\",\"qtd\":0,\"precoUnit\":0}]}. " +
+    "Responda em JSON no formato: {\"fornecedor\":\"\",\"data\":\"AAAA-MM-DD\",\"numero\":\"\",\"chave\":\"\",\"itens\":[{\"nome\":\"\",\"codigoBarras\":\"\",\"qtd\":0,\"precoUnit\":0}]}. " +
     "nome = descrição do produto (limpa, sem códigos). codigoBarras = o código de barras EAN/GTIN do item (geralmente 13 dígitos; use \"\" se não aparecer). " +
     "qtd = quantidade (número). precoUnit = valor unitário em reais (número, ponto decimal). " +
+    "numero = o número da nota fiscal/cupom (só o número, ex.: \"012345\"; use \"\" se não achar). " +
+    "chave = a chave de acesso da NF-e (44 dígitos), se aparecer; senão \"\". " +
     "Se o fornecedor/emitente aparecer, preencha; senão deixe vazio. Se a data aparecer, use AAAA-MM-DD. Ignore itens que não sejam produtos (frete, impostos, totais).";
   const body = {
     contents: [{ parts: [{ inline_data: { mime_type: mime, data: base64 } }, { text: instrucao }] }],
@@ -984,6 +986,34 @@ async function lerNotaIA(base64, mime) {
   return dados;
 }
 
+// ---- Trava de nota duplicada ----
+// Deriva a chave de deduplicação do campo "Nº da nota". Se tiver 44 dígitos, é
+// a chave de acesso da NF-e (única no país). Senão, é o número da nota (que
+// pode repetir entre fornecedores → só conta como duplicata no MESMO fornecedor).
+function chaveNota(idField) {
+  const s = String(idField || "").trim(); if (!s) return "";
+  const dig = s.replace(/\D/g, "");
+  if (dig.length >= 44) return "C:" + dig.slice(-44);
+  return "N:" + s;
+}
+// Procura uma compra já lançada com a mesma nota. Devolve a compra ou null.
+function notaDuplicada(idField, fornecedor) {
+  const key = chaveNota(idField); if (!key) return null;
+  const ehChave = key.indexOf("C:") === 0;
+  return (DADOS.compras || []).find((c) => {
+    if (!c.notaChave || c.notaChave !== key) return false;
+    return ehChave ? true : normTexto(c.fornecedor) === normTexto(fornecedor);
+  }) || null;
+}
+function verificarNotaDup() {
+  const f = $("#form-nota"); const aviso = $("#nota-dup-aviso"); if (!aviso) return;
+  const dup = notaDuplicada(f.numero ? f.numero.value : "", f.fornecedor.value);
+  if (dup) {
+    aviso.innerHTML = `⚠ Esta nota já foi lançada em <b>${dataBR(dup.data)}</b>. Salvar de novo vai <b>duplicar o estoque</b> (as quantidades somam de novo).`;
+    aviso.classList.remove("hidden");
+  } else { aviso.classList.add("hidden"); }
+}
+
 // ---- Modal de conferência dos itens lidos ----
 let confNota = null;
 function abrirModalNota(nota) {
@@ -991,10 +1021,12 @@ function abrirModalNota(nota) {
   f.reset();
   f.fornecedor.value = nota.fornecedor || "";
   f.data.value = (nota.data && /^\d{4}-\d{2}-\d{2}$/.test(nota.data)) ? nota.data : hojeISO();
+  if (f.numero) f.numero.value = nota.chave || nota.numero || "";
   const itens = Array.isArray(nota.itens) && nota.itens.length ? nota.itens : [{}];
   const reserv = new Set();
   confNota = { linhas: itens.map((it) => linhaNotaModelo(it, reserv)) };
   renderNotaItens();
+  verificarNotaDup();
   atualizarDatalists();
   abrir("#modal-nota");
 }
@@ -1048,19 +1080,29 @@ function renderNotaItens() {
 
 $("#btn-add-item-nota").addEventListener("click", () => { confNota.linhas.push(linhaNotaModelo({}, new Set())); renderNotaItens(); });
 
+// Reavalia o aviso de duplicidade quando muda o nº da nota ou o fornecedor.
+$("#form-nota").addEventListener("input", (e) => {
+  if (e.target.name === "numero" || e.target.name === "fornecedor") verificarNotaDup();
+});
+
 $("#form-nota").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
   const fornecedor = f.fornecedor.value.trim();
   const data = f.data.value || hojeISO();
+  const numero = f.numero ? f.numero.value.trim() : "";
+  const notaChave = chaveNota(numero);
   const compras = [];
   confNota.linhas.forEach((l) => {
     if (l.nome && l.qtd > 0) {
       const sku = (l.criarNovo || !l.skuAlvo) ? l.skuNovo : l.skuAlvo;
-      compras.push({ nome: l.nome, qtd: l.qtd, precoUnit: l.precoUnit, fornecedor, data, notaChave: "", sku, codigoBarras: l.codigoBarras || "" });
+      compras.push({ nome: l.nome, qtd: l.qtd, precoUnit: l.precoUnit, fornecedor, data, notaChave, sku, codigoBarras: l.codigoBarras || "" });
     }
   });
   if (compras.length === 0) { toast("Preencha ao menos um item (nome e quantidade)"); return; }
+  // Trava de duplicidade: avisa e deixa decidir (não bloqueia).
+  const dup = notaDuplicada(numero, fornecedor);
+  if (dup && !confirm(`Você já lançou esta nota em ${dataBR(dup.data)}.\n\nSalvar de novo vai DUPLICAR o estoque (as quantidades somam de novo).\n\nTem certeza que quer lançar mesmo assim?`)) return;
   await comProgresso(async () => { for (const c of compras) await registrarCompra(c); });
   fechar("#modal-nota"); await recarregar(); irPara("estoque");
   toast(`${compras.length} ${compras.length === 1 ? "compra salva" : "compras salvas"} ✓`);

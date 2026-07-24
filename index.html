@@ -225,6 +225,8 @@
           <label>Fornecedor <input name="fornecedor" list="lista-fornecedores" placeholder="Fornecedor" /></label>
           <label>Data <input name="data" type="date" /></label>
         </div>
+        <label>Nº da nota (ou chave de acesso) <input name="numero" placeholder="Ex.: 012345 ou a chave de 44 dígitos" autocomplete="off" /></label>
+        <div id="nota-dup-aviso" class="nota-dup-aviso hidden"></div>
         <p class="dica">Confira o que a IA leu, ajuste o que precisar e salve. Cada linha vira uma compra.</p>
         <div id="nota-itens" class="nota-itens"></div>
         <button type="button" class="btn-secundario" id="btn-add-item-nota">+ Adicionar item</button>
