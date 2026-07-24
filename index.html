@@ -42,6 +42,7 @@
     <div class="filtros" id="filtros"></div>
     <div class="estoque-barra">
       <div class="resultado-info" id="resultado-info"></div>
+      <button class="btn-selecionar" id="btn-precos-adega">💲 Preços</button>
       <button class="btn-selecionar" id="btn-selecionar">☑ Selecionar</button>
     </div>
 
@@ -159,10 +160,7 @@
           <label>Código do sistema <input name="codigo" placeholder="Ex.: 01022 (opcional)" /></label>
           <label>Preço de venda padrão (R$) <input name="precoVenda" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00" /></label>
         </div>
-        <div class="form-linha">
-          <label>Preço nesta adega (R$) <input name="precoVendaPdv" type="number" min="0" step="0.01" inputmode="decimal" placeholder="usa o padrão" /></label>
-        </div>
-        <p class="dica" id="item-preco-adega-dica"></p>
+        <p class="dica">O preço por adega fica em <b>💲 Preços</b> (na tela do estoque). Este é só o padrão, usado quando a adega não tem preço próprio.</p>
         <div class="form-linha">
           <label>Retaguarda (un.) <input name="qtd" type="number" min="0" step="1" value="0" inputmode="numeric" /></label>
           <label>Alerta abaixo de <input name="minimo" type="number" min="0" step="1" value="3" inputmode="numeric" /></label>
@@ -448,6 +446,21 @@
         </div>
         <div id="lista-adegas" class="adegas-lista"></div>
         <p class="dica">Arquivar esconde a adega das telas sem apagar o histórico — dá pra reativar quando quiser. As garrafas se movem entre adegas pelo botão <b>⇄ Mover</b> em cada vinho.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====================== MODAL: PREÇOS POR ADEGA ====================== -->
+  <div id="modal-precos" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-conteudo">
+      <div class="modal-topo">
+        <h2>Preços por adega</h2>
+        <button class="modal-fechar" data-fecha aria-label="Fechar">✕</button>
+      </div>
+      <div class="form">
+        <label>Adega <select id="precos-pdv"></select></label>
+        <p class="dica">Defina o preço de venda de cada vinho <b>nesta adega</b>. Em branco = usa o preço padrão do rótulo. Salva sozinho.</p>
+        <div id="precos-lista" class="precos-lista"></div>
       </div>
     </div>
   </div>

@@ -508,6 +508,34 @@ $("#btn-nova-adega").addEventListener("click", async () => {
   toast(`Adega "${nome}" criada ✓`);
 });
 
+// --- Tela: Preços por adega (edita o preço de cada vinho numa adega, num lugar só) ---
+function abrirModalPrecos() {
+  const sel = $("#precos-pdv");
+  sel.innerHTML = opcoesPdv(pdvAtual);
+  renderPrecosLista(sel.value || pdvAtual);
+  abrir("#modal-precos");
+}
+function renderPrecosLista(pdv) {
+  const cont = $("#precos-lista"); if (!cont) return;
+  cont.innerHTML = "";
+  const lista = (DADOS.estoque || []).slice().sort((a, b) => String(a.nome).localeCompare(String(b.nome)));
+  if (!lista.length) { cont.innerHTML = `<p class="dica">Cadastre vinhos no estoque primeiro.</p>`; return; }
+  lista.forEach((v) => {
+    const lp = linhaPdv(v.sku, pdv);
+    const override = (lp && lp.precoVenda > 0) ? lp.precoVenda : "";
+    const padrao = Number(v.precoVenda) || 0;
+    const row = el("div", "preco-row");
+    row.innerHTML = `
+      <span class="preco-nome">${escaparHtml(v.nome || "(sem nome)")}</span>
+      <div class="preco-campo">R$ <input type="number" min="0" step="0.01" inputmode="decimal" value="${override}" placeholder="${padrao ? String(padrao).replace(".", ",") : "padrão"}" /></div>`;
+    const inp = row.querySelector("input");
+    inp.addEventListener("change", () => { ajustarPrecoPdv(v.sku, pdv, Number(inp.value) || 0); });
+    cont.appendChild(row);
+  });
+}
+$("#btn-precos-adega").addEventListener("click", abrirModalPrecos);
+$("#precos-pdv").addEventListener("change", (e) => renderPrecosLista(e.target.value));
+
 function classeTipo(t) { return { Tinto: "tag-tinto", Branco: "tag-branco", "Rosé": "tag-rose", Espumante: "tag-espumante" }[t] || "tag-tinto"; }
 
 function renderEstoque() {
@@ -855,11 +883,7 @@ function abrirModalItem(item) {
     f.obs.value = item.obs || "";
     if (f.codigo) f.codigo.value = item.codigo || "";
     if (f.precoVenda) f.precoVenda.value = item.precoVenda || "";
-    // Preço específico DESTA adega (se houver um definido; senão fica vazio = usa o padrão).
-    if (f.precoVendaPdv) { const lp = linhaPdv(item.sku, pdvAtual); f.precoVendaPdv.value = (lp && lp.precoVenda > 0) ? lp.precoVenda : ""; }
   } else { f.dataCompra.value = hojeISO(); }
-  const dica = $("#item-preco-adega-dica");
-  if (dica) dica.textContent = `Preço só para a adega "${pdvAtual}". Deixe vazio para usar o preço padrão.`;
   atualizarDatalists();
   abrir("#modal-item");
 }
@@ -881,13 +905,7 @@ $("#form-item").addEventListener("submit", async (e) => {
   };
   delete item.__row;
   if (!item.nome) return;
-  await comProgresso(async () => {
-    await salvarItem(item, f.sku_original.value || null);
-    // Preço específico da adega atual: aplica se preencheu, ou se havia um e foi limpo (volta ao padrão).
-    const precoPdvVal = f.precoVendaPdv ? f.precoVendaPdv.value.trim() : "";
-    const overrideAtual = (linhaPdv(item.sku, pdvAtual) || {}).precoVenda || 0;
-    if (precoPdvVal !== "" || overrideAtual > 0) await ajustarPrecoPdv(item.sku, pdvAtual, Number(precoPdvVal) || 0);
-  });
+  await comProgresso(() => salvarItem(item, f.sku_original.value || null));
   fechar("#modal-item"); await recarregar(); toast("Garrafa salva ✓");
 });
 
