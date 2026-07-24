@@ -154,6 +154,7 @@ function doPost(e) {
       case "varrerAgora":      r = varrerPrecosPublicos(false); break;
       case "salvarLoja":       r = salvarLoja(body.loja, body.urlOriginal); break;
       case "excluirLoja":      r = excluirLoja(body.url); break;
+      case "salvarPdv":        r = salvarPdv(body.pdv, body.nomeOriginal); break;
       case "abastecerPdv":     r = abastecerPdv(body.sku, body.pdv, body.qtd); break;
       case "ajustarPdv":       r = ajustarPdv(body.sku, body.pdv, body.qtd); break;
       case "importarPlanograma": r = importarPlanograma(body.pdv, body.itens); break;
@@ -267,6 +268,23 @@ function _slug(s) {
  *  adega; vender (importar) desconta da adega; importar planograma acerta a adega
  *  com a posição real do sistema.
  */
+
+// Cria uma adega (PDV) ou atualiza o status ativo/obs de uma existente.
+// (Não renomeia em cascata — fora do escopo atual.)
+function salvarPdv(pdv, nomeOriginal) {
+  pdv = pdv || {};
+  var nome = String(pdv.nome || "").trim();
+  if (!nome) throw new Error("Informe o nome da adega.");
+  var sh = _aba(ABA_PDVS, COL_PDVS);
+  var alvo = String(nomeOriginal || nome).trim();
+  var linha = _acharLinhaCol(sh, 1, alvo); // coluna 1 = nome
+  var ativo = (pdv.ativo == null || pdv.ativo === "") ? "sim" : String(pdv.ativo);
+  var obj = { nome: (linha > 0 ? alvo : nome), ativo: ativo, obs: pdv.obs || "" };
+  var arr = _objParaLinha(obj, COL_PDVS);
+  if (linha > 0) sh.getRange(linha, 1, 1, COL_PDVS.length).setValues([arr]);
+  else sh.appendRow(arr);
+  return { ok: true };
+}
 
 // Garante que uma adega (PDV) exista na aba Pdvs.
 function _garantePdv(nome) {

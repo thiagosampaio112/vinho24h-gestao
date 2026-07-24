@@ -140,12 +140,11 @@ function normalizarDados() {
 }
 
 // --- Ajudantes de PDV (ponto de venda / adega) ---
-function pdvsAtivos() {
-  return (DADOS.pdvs || []).filter((p) => {
-    const a = String(p.ativo == null ? "sim" : p.ativo).toLowerCase();
-    return p.nome && a !== "nao" && a !== "não" && a !== "false" && a !== "0";
-  });
+function pdvAtivoBool(p) {
+  const a = String(p && p.ativo == null ? "sim" : p.ativo).toLowerCase();
+  return !!(p && p.nome) && a !== "nao" && a !== "não" && a !== "false" && a !== "0";
 }
+function pdvsAtivos() { return (DADOS.pdvs || []).filter(pdvAtivoBool); }
 function linhaPdv(sku, pdv) { return DADOS.pdvEstoque.find((r) => r.sku === sku && r.pdv === pdv); }
 function qtdNoPdv(sku, pdv) { const r = linhaPdv(sku, pdv); return r ? (Number(r.qtd) || 0) : 0; }
 function qtdPdvTotal(sku) { return DADOS.pdvEstoque.filter((r) => r.sku === sku).reduce((s, r) => s + (Number(r.qtd) || 0), 0); }
@@ -312,6 +311,32 @@ async function ajustarQtd(sku, delta) {
   if (online()) sincronizarFundo("ajustarQtd", { sku, qtd: nova });
 }
 
+// --- Adegas (PDVs): criar / arquivar / reativar (otimista + sync em 2º plano) ---
+async function salvarPdv(pdv, nomeOriginal) {
+  const nome = String(pdv.nome || "").trim(); if (!nome) return;
+  const alvo = String(nomeOriginal || nome).trim();
+  const idx = DADOS.pdvs.findIndex((p) => String(p.nome).trim() === alvo);
+  if (idx >= 0) DADOS.pdvs[idx] = { ...DADOS.pdvs[idx], nome: alvo, ativo: pdv.ativo || "sim", obs: pdv.obs != null ? pdv.obs : (DADOS.pdvs[idx].obs || "") };
+  else DADOS.pdvs.push({ nome, ativo: pdv.ativo || "sim", obs: pdv.obs || "" });
+  gravarLocal();
+  if (online()) sincronizarFundo("salvarPdv", { pdv: { nome: idx >= 0 ? alvo : nome, ativo: pdv.ativo || "sim", obs: pdv.obs || "" }, nomeOriginal: nomeOriginal || null });
+}
+// Transferir garrafas de uma adega para outra (reusa o ajustarPdv otimista).
+async function transferirEntreAdegas(sku, origem, destino, qtd) {
+  qtd = Number(qtd) || 0;
+  if (qtd <= 0 || !destino || origem === destino) return;
+  qtd = Math.min(qtd, qtdNoPdv(sku, origem)); if (qtd <= 0) return;
+  await ajustarPdv(sku, origem, -qtd);
+  await ajustarPdv(sku, destino, +qtd);
+}
+// Devolver garrafas da adega para a retaguarda (desfaz um abastecimento).
+async function devolverParaRetaguarda(sku, origem, qtd) {
+  qtd = Number(qtd) || 0; if (qtd <= 0) return;
+  qtd = Math.min(qtd, qtdNoPdv(sku, origem)); if (qtd <= 0) return;
+  await ajustarPdv(sku, origem, -qtd);
+  await ajustarQtd(sku, +qtd);
+}
+
 // ======================================================================
 //  IMPORTAR — aplica as linhas já conferidas pelo usuário
 //  resolvidos = [{ sku, novo, rotulo:{...}, quantAtual, minimo, nivelPar }]  (planograma)
@@ -408,23 +433,61 @@ function renderResumo() {
     <div class="resumo-caixa ${repor ? "alerta" : ""}"><span class="num">${repor}</span><span class="rot">repor</span></div>`;
 }
 
-// Barra de seleção da adega (aparece quando há mais de uma; sempre mostra a atual).
+// Barra de seleção da adega. Sempre mostra a atual + um botão "⚙ adegas"
+// (criar/arquivar/reativar). Com 2+ adegas ativas, mostra os chips para trocar.
 function renderSeletorPdv() {
   const cont = $("#pdv-seletor"); if (!cont) return;
   const ativas = pdvsAtivos();
   cont.innerHTML = "";
+  cont.classList.toggle("solo", ativas.length <= 1);
   if (ativas.length <= 1) {
-    cont.classList.add("solo");
-    cont.innerHTML = `<span class="pdv-atual-solo">🏬 ${escaparHtml(pdvAtual || (ativas[0] && ativas[0].nome) || "Adega")}</span>`;
-    return;
+    cont.appendChild(el("span", "pdv-atual-solo", "🏬 " + escaparHtml(pdvAtual || (ativas[0] && ativas[0].nome) || "Adega")));
+  } else {
+    ativas.forEach((p) => {
+      const b = el("button", "pdv-chip" + (p.nome === pdvAtual ? " ativo" : ""), "🏬 " + escaparHtml(p.nome));
+      b.addEventListener("click", () => { pdvAtual = p.nome; renderEstoque(); });
+      cont.appendChild(b);
+    });
   }
-  cont.classList.remove("solo");
-  ativas.forEach((p) => {
-    const b = el("button", "pdv-chip" + (p.nome === pdvAtual ? " ativo" : ""), "🏬 " + escaparHtml(p.nome));
-    b.addEventListener("click", () => { pdvAtual = p.nome; renderEstoque(); });
-    cont.appendChild(b);
+  const ger = el("button", "pdv-chip pdv-ger", "⚙ adegas");
+  ger.addEventListener("click", abrirModalAdegas);
+  cont.appendChild(ger);
+}
+
+// --- Modal: gerenciar adegas (criar / arquivar / reativar) ---
+function abrirModalAdegas() { renderListaAdegas(); abrir("#modal-adegas"); }
+function renderListaAdegas() {
+  const cont = $("#lista-adegas"); if (!cont) return;
+  cont.innerHTML = "";
+  (DADOS.pdvs || []).forEach((p) => {
+    const ativa = pdvAtivoBool(p);
+    const nGarrafas = DADOS.pdvEstoque.filter((r) => r.pdv === p.nome).reduce((s, r) => s + (Number(r.qtd) || 0), 0);
+    const row = el("div", "adega-row" + (ativa ? "" : " arquivada"));
+    row.innerHTML = `
+      <div class="adega-info">
+        <span class="adega-nome">🏬 ${escaparHtml(p.nome)}</span>
+        <span class="adega-tag">${ativa ? "ativa" : "arquivada"} · ${nGarrafas} ${nGarrafas === 1 ? "garrafa" : "garrafas"}</span>
+      </div>
+      <button class="btn-secundario adega-toggle">${ativa ? "Arquivar" : "Reativar"}</button>`;
+    row.querySelector(".adega-toggle").addEventListener("click", async () => {
+      if (ativa && pdvsAtivos().length <= 1) { toast("Deixe ao menos uma adega ativa"); return; }
+      await comProgresso(() => salvarPdv({ nome: p.nome, ativo: ativa ? "nao" : "sim", obs: p.obs || "" }, p.nome));
+      if (ativa && pdvAtual === p.nome) { const a = pdvsAtivos(); if (a[0]) pdvAtual = a[0].nome; }
+      renderListaAdegas(); renderEstoque();
+      toast(ativa ? `Adega "${p.nome}" arquivada` : `Adega "${p.nome}" reativada ✓`);
+    });
+    cont.appendChild(row);
   });
 }
+$("#btn-nova-adega").addEventListener("click", async () => {
+  const inp = $("#nova-adega-nome");
+  const nome = inp.value.trim();
+  if (!nome) { toast("Escreva o nome da adega"); inp.focus(); return; }
+  if ((DADOS.pdvs || []).some((p) => String(p.nome).trim().toLowerCase() === nome.toLowerCase())) { toast("Já existe uma adega com esse nome"); return; }
+  await comProgresso(() => salvarPdv({ nome, ativo: "sim" }));
+  inp.value = ""; renderListaAdegas(); renderEstoque();
+  toast(`Adega "${nome}" criada ✓`);
+});
 
 function classeTipo(t) { return { Tinto: "tag-tinto", Branco: "tag-branco", "Rosé": "tag-rose", Espumante: "tag-espumante" }[t] || "tag-tinto"; }
 
@@ -471,6 +534,7 @@ function renderEstoque() {
             <span class="est-num">${naAdega}</span>
             <button class="qtd-btn mais" aria-label="Aumentar na adega">+</button>
           </div>
+          <button class="btn-mover" ${naAdega <= 0 ? "disabled" : ""}>⇄ Mover</button>
         </div>
         <div class="est-bloco est-retag">
           <div class="est-rot">Retaguarda</div>
@@ -492,6 +556,8 @@ function renderEstoque() {
       item.querySelector(".mais-r").addEventListener("click", async () => { await ajustarQtd(v.sku, +1); renderEstoque(); });
       const ab = item.querySelector(".btn-abastecer");
       if (ab && retag > 0) ab.addEventListener("click", () => abrirModalAbastecer(v));
+      const mv = item.querySelector(".btn-mover");
+      if (mv && naAdega > 0) mv.addEventListener("click", () => abrirModalMover(v));
     }
     grade.appendChild(item);
   });
@@ -1285,6 +1351,40 @@ $("#form-abastecer").addEventListener("submit", async (e) => {
   await comProgresso(() => abastecerPdv(sku, pdv, qtd));
   fechar("#modal-abastecer"); pdvAtual = pdv; await recarregar();
   toast(`${qtd} ${qtd === 1 ? "garrafa" : "garrafas"} na adega ✓`);
+});
+
+// --- Modal: Mover garrafas (entre adegas / devolver à retaguarda) ---
+function abrirModalMover(item) {
+  const f = $("#form-mover"); f.reset();
+  f.sku.value = item.sku;
+  $("#mover-nome").textContent = item.nome || "(sem nome)";
+  $("#mover-origem").textContent = pdvAtual;
+  const disp = qtdNoPdv(item.sku, pdvAtual);
+  const outras = pdvsAtivos().filter((p) => p.nome !== pdvAtual);
+  let opts = outras.map((p) => `<option value="pdv:${escaparAttr(p.nome)}">🏬 ${escaparHtml(p.nome)}</option>`).join("");
+  opts += `<option value="retag">↩ Retaguarda (estoque guardado)</option>`;
+  $("#mover-destino").innerHTML = opts;
+  f.qtd.max = disp; f.qtd.value = disp > 0 ? 1 : 0;
+  $("#mover-disp").textContent = `Disponível na adega ${pdvAtual}: ${disp}`;
+  abrir("#modal-mover");
+}
+$("#form-mover").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const sku = f.sku.value, destino = f.destino.value, qtd = Number(f.qtd.value) || 0;
+  const disp = qtdNoPdv(sku, pdvAtual);
+  if (qtd <= 0) { toast("Informe quantas garrafas"); return; }
+  if (qtd > disp) { toast("A adega não tem tudo isso"); return; }
+  if (destino === "retag") {
+    await comProgresso(() => devolverParaRetaguarda(sku, pdvAtual, qtd));
+    fechar("#modal-mover"); await recarregar();
+    toast(`${qtd} ${qtd === 1 ? "garrafa devolvida" : "garrafas devolvidas"} à retaguarda ✓`);
+  } else if (destino.indexOf("pdv:") === 0) {
+    const dest = destino.slice(4);
+    await comProgresso(() => transferirEntreAdegas(sku, pdvAtual, dest, qtd));
+    fechar("#modal-mover"); await recarregar();
+    toast(`${qtd} ${qtd === 1 ? "garrafa movida" : "garrafas movidas"} para ${dest} ✓`);
+  }
 });
 
 // ======================================================================

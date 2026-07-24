@@ -408,6 +408,44 @@
     </div>
   </div>
 
+  <!-- ====================== MODAL: MOVER GARRAFAS ====================== -->
+  <div id="modal-mover" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-conteudo">
+      <div class="modal-topo">
+        <h2>Mover garrafas</h2>
+        <button class="modal-fechar" data-fecha aria-label="Fechar">✕</button>
+      </div>
+      <form id="form-mover" class="form">
+        <input type="hidden" name="sku" />
+        <p class="dica">Tira da adega <b id="mover-origem"></b> e envia para o destino. <span id="mover-nome" class="abastecer-nome"></span></p>
+        <div class="form-linha">
+          <label>Destino <select name="destino" id="mover-destino"></select></label>
+          <label>Quantidade <input name="qtd" type="number" min="1" step="1" inputmode="numeric" required /></label>
+        </div>
+        <p class="dica" id="mover-disp"></p>
+        <div class="form-botoes"><button type="submit" class="btn-primario">Mover</button></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ====================== MODAL: GERENCIAR ADEGAS ====================== -->
+  <div id="modal-adegas" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-conteudo">
+      <div class="modal-topo">
+        <h2>Adegas</h2>
+        <button class="modal-fechar" data-fecha aria-label="Fechar">✕</button>
+      </div>
+      <div class="form">
+        <div class="nova-adega-linha">
+          <label class="nova-adega-campo">Nova adega <input id="nova-adega-nome" placeholder="Ex.: J. PRIME" autocomplete="off" /></label>
+          <button type="button" class="btn-secundario" id="btn-nova-adega">＋ Criar</button>
+        </div>
+        <div id="lista-adegas" class="adegas-lista"></div>
+        <p class="dica">Arquivar esconde a adega das telas sem apagar o histórico — dá pra reativar quando quiser. As garrafas se movem entre adegas pelo botão <b>⇄ Mover</b> em cada vinho.</p>
+      </div>
+    </div>
+  </div>
+
   <!-- ====================== MODAL: CONFERIR PLANOGRAMA ====================== -->
   <div id="modal-conf-plano" class="modal-overlay hidden" role="dialog" aria-modal="true">
     <div class="modal-conteudo modal-largo">

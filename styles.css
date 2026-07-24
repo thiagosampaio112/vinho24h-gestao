@@ -415,6 +415,26 @@ body {
   background: transparent; color: var(--texto-suave); font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;
 }
 .pdv-chip.ativo { background: var(--vinho); border-color: var(--dourado); color: var(--dourado-claro); }
+.pdv-chip.pdv-ger { border-style: dashed; }
+
+/* Botão "⇄ Mover" no bloco da adega (mesmo visual do abastecer) */
+.btn-mover {
+  width: 100%; margin-top: 6px;
+  background: transparent; border: 1px solid var(--dourado); color: var(--dourado-claro);
+  border-radius: 8px; padding: 6px 10px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap;
+}
+.btn-mover:disabled { opacity: .35; border-color: var(--card-borda); color: var(--texto-suave); cursor: default; }
+
+/* Modal gerenciar adegas */
+.nova-adega-linha { display: flex; gap: 10px; align-items: flex-end; }
+.nova-adega-campo { flex: 1; }
+.adegas-lista { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.adega-row { display: flex; align-items: center; gap: 12px; background: var(--card); border: 1px solid var(--card-borda); border-radius: 12px; padding: 10px 12px; }
+.adega-row.arquivada { opacity: .7; }
+.adega-info { flex: 1 1 auto; min-width: 0; }
+.adega-nome { display: block; font-weight: 700; color: var(--dourado-claro); }
+.adega-tag { font-size: 12px; color: var(--texto-suave); }
+.adega-toggle { flex: 0 0 auto; padding: 8px 12px; font-size: 13px; white-space: nowrap; }
 
 .estoque-acoes { display: flex; gap: 10px; max-width: 640px; margin: 0 auto; padding: 10px 18px 0; }
 .estoque-acoes .btn-secundario { flex: 1; padding: 10px 14px; font-size: 14px; }
