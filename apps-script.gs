@@ -184,8 +184,8 @@ function doPost(e) {
       case "registrarDespesa": r = registrarDespesa(body.despesa); break;
       case "excluirDespesa":   r = excluirDespesa(body.despesa || body.linha); break;
       case "excluirVenda":     r = excluirVenda(body.venda); break;
-      case "registrarVendaManual": r = registrarVendaManual(body.venda); break;
-      case "registrarBaixa":   r = registrarBaixa(body.baixa); break;
+      case "registrarVendaManual": r = registrarVendaManual(body.vendas || body.venda); break;
+      case "registrarBaixa":   r = registrarBaixa(body.baixas || body.baixa); break;
       case "excluirBaixa":     r = excluirBaixa(body.baixa); break;
       case "excluirVendasPeriodo": r = excluirVendasPeriodo(body.pdv, body.periodoInicio, body.periodoFim); break;
       case "salvarVinhoGuia":  r = salvarVinhoGuia(body.vinho, body.idOriginal, body.guiaId, body.guiaGid); break;
@@ -302,26 +302,33 @@ function _mesmaDespesa(a, b) {
 // lucro líquido como uma linha própria do DRE (o app soma as baixas do período),
 // então NÃO criamos uma linha na aba Despesas — assim não há risco de a despesa
 // e a baixa saírem de sincronia ao excluir uma delas.
+// Aceita UMA baixa ou uma LISTA (baixa em lote: vários rótulos de uma vez).
+// `pdv` VAZIO = "Geral": só permitido quando a garrafa sai da RETAGUARDA, que é
+// comum às adegas. Saindo da adega o pdv é obrigatório (é de lá que se desconta).
 function registrarBaixa(baixa) {
-  baixa = baixa || {};
-  var sku = String(baixa.sku || "");
-  var pdv = String(baixa.pdv || "");
-  if (!sku) throw new Error("Baixa sem rótulo (sku).");
-  if (!pdv) throw new Error("Baixa sem adega.");
-  var qtd = _num(baixa.qtd);
-  if (qtd <= 0) throw new Error("Quantidade da baixa deve ser maior que zero.");
-  _garantePdv(pdv);
-  var daRetaguarda = String(baixa.origem) === "retaguarda";
-  var custoUnit = _num(baixa.custoUnit);
+  var lista = Array.isArray(baixa) ? baixa : [baixa || {}];
   var sh = _aba(ABA_BAIXAS, COL_BAIXAS);
-  sh.appendRow(_objParaLinha({
-    data: _fmtData(baixa.data) || Utilities.formatDate(new Date(), "GMT-3", "yyyy-MM-dd"),
-    pdv: pdv, sku: sku, qtd: qtd, motivo: baixa.motivo || "Outro", descricao: baixa.descricao || "",
-    custoUnit: custoUnit, valor: custoUnit * qtd, origem: daRetaguarda ? "retaguarda" : "adega",
-  }, COL_BAIXAS));
-  if (daRetaguarda) _addEstoqueQtd(sku, -qtd);
-  else _setPdvEstoque(pdv, sku, { qtd: Math.max(0, _qtdPdv(pdv, sku) - qtd) });
-  return { ok: true };
+  var linhas = [];
+  lista.forEach(function (b) {
+    var sku = String(b.sku || "");
+    var pdv = String(b.pdv || "");
+    if (!sku) throw new Error("Baixa sem rótulo (sku).");
+    var qtd = _num(b.qtd);
+    if (qtd <= 0) throw new Error("Quantidade da baixa deve ser maior que zero.");
+    var daRetaguarda = String(b.origem) === "retaguarda";
+    if (!pdv && !daRetaguarda) throw new Error("Baixa da adega precisa dizer qual adega.");
+    if (pdv) _garantePdv(pdv);
+    var custoUnit = _num(b.custoUnit);
+    linhas.push({
+      data: _fmtData(b.data) || Utilities.formatDate(new Date(), "GMT-3", "yyyy-MM-dd"),
+      pdv: pdv, sku: sku, qtd: qtd, motivo: b.motivo || "Outro", descricao: b.descricao || "",
+      custoUnit: custoUnit, valor: custoUnit * qtd, origem: daRetaguarda ? "retaguarda" : "adega",
+    });
+    if (daRetaguarda) _addEstoqueQtd(sku, -qtd);
+    else _setPdvEstoque(pdv, sku, { qtd: Math.max(0, _qtdPdv(pdv, sku) - qtd) });
+  });
+  if (linhas.length) sh_setBloco(sh, sh.getLastRow() + 1, linhas, COL_BAIXAS);
+  return { ok: true, gravadas: linhas.length };
 }
 // Exclui a baixa e DEVOLVE a garrafa de onde ela saiu.
 // Casa pelo CONTEÚDO (não pelo número da linha) porque a baixa pode ter sido
@@ -613,28 +620,33 @@ function _addEstoqueQtd(sku, delta) {
 // VENDA AVULSA (fora do sistema da adega: pix, encomenda de amigo...).
 // Grava UMA linha em Vendas com a origem marcada e baixa o estoque do lugar
 // escolhido. O período é o próprio dia da venda (início = fim).
+// Aceita UMA venda ou uma LISTA (venda avulsa em lote: vários rótulos de uma vez).
 function registrarVendaManual(venda) {
-  venda = venda || {};
-  var pdv = String(venda.pdv || "");
-  var sku = String(venda.sku || "");
-  if (!sku) throw new Error("Venda avulsa sem rótulo (sku).");
-  if (!pdv) throw new Error("Venda avulsa sem adega.");
-  _garantePdv(pdv);
-  var qtd = _num(venda.qtd);
-  if (qtd <= 0) throw new Error("Quantidade da venda avulsa deve ser maior que zero.");
-  var preco = _num(venda.precoMedio);
-  var data = _fmtData(venda.data) || Utilities.formatDate(new Date(), "GMT-3", "yyyy-MM-dd");
-  var daRetaguarda = String(venda.origem) === "avulsa-retaguarda";
+  var lista = Array.isArray(venda) ? venda : [venda || {}];
   var shV = _aba(ABA_VENDAS, COL_VENDAS);
-  shV.appendRow(_objParaLinha({
-    periodoInicio: data, periodoFim: data, importadoEm: data, pdv: pdv, sku: sku,
-    codigo: venda.codigo || "", descricao: venda.descricao || "", categoria: venda.categoria || "",
-    qtd: qtd, precoMedio: preco, valorVendido: _num(venda.valorVendido) || preco * qtd,
-    origem: daRetaguarda ? "avulsa-retaguarda" : "avulsa-adega",
-  }, COL_VENDAS));
-  if (daRetaguarda) _addEstoqueQtd(sku, -qtd);
-  else _setPdvEstoque(pdv, sku, { qtd: Math.max(0, _qtdPdv(pdv, sku) - qtd) });
-  return { ok: true };
+  var linhas = [];
+  lista.forEach(function (v) {
+    var pdv = String(v.pdv || "");
+    var sku = String(v.sku || "");
+    if (!sku) throw new Error("Venda avulsa sem rótulo (sku).");
+    if (!pdv) throw new Error("Venda avulsa sem adega.");
+    _garantePdv(pdv);
+    var qtd = _num(v.qtd);
+    if (qtd <= 0) throw new Error("Quantidade da venda avulsa deve ser maior que zero.");
+    var preco = _num(v.precoMedio);
+    var data = _fmtData(v.data) || Utilities.formatDate(new Date(), "GMT-3", "yyyy-MM-dd");
+    var daRetaguarda = String(v.origem) === "avulsa-retaguarda";
+    linhas.push({
+      periodoInicio: data, periodoFim: data, importadoEm: data, pdv: pdv, sku: sku,
+      codigo: v.codigo || "", descricao: v.descricao || "", categoria: v.categoria || "",
+      qtd: qtd, precoMedio: preco, valorVendido: _num(v.valorVendido) || preco * qtd,
+      origem: daRetaguarda ? "avulsa-retaguarda" : "avulsa-adega",
+    });
+    if (daRetaguarda) _addEstoqueQtd(sku, -qtd);
+    else _setPdvEstoque(pdv, sku, { qtd: Math.max(0, _qtdPdv(pdv, sku) - qtd) });
+  });
+  if (linhas.length) sh_setBloco(shV, shV.getLastRow() + 1, linhas, COL_VENDAS);
+  return { ok: true, gravadas: linhas.length };
 }
 function _mesmaVenda(a, b) {
   return String(a.pdv) === String(b.pdv) && String(a.sku) === String(b.sku) &&

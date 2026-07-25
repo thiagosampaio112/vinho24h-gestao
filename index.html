@@ -504,17 +504,15 @@
           <label>Data <input name="data" type="date" required /></label>
           <label>Adega <select name="pdv" id="avulsa-pdv"></select></label>
         </div>
-        <label>Vinho <select name="sku" id="avulsa-sku" required></select></label>
-        <label>De onde saiu a garrafa
+        <label>De onde saíram as garrafas
           <select name="origem" id="avulsa-origem">
-            <option value="avulsa-adega">Da adega (estava à venda na máquina)</option>
+            <option value="avulsa-adega">Da adega (estavam à venda na máquina)</option>
             <option value="avulsa-retaguarda">Da retaguarda (estoque guardado)</option>
           </select>
         </label>
-        <div class="form-linha">
-          <label>Quantidade <input name="qtd" type="number" min="1" step="1" inputmode="numeric" required value="1" /></label>
-          <label>Preço por garrafa (R$) <input name="preco" type="number" min="0" step="0.01" inputmode="decimal" required placeholder="0,00" /></label>
-        </div>
+        <div class="lote-rot">Vinhos desta venda</div>
+        <div id="avulsa-itens" class="lote-itens"></div>
+        <button type="button" class="btn-secundario lote-add" id="avulsa-add">＋ Adicionar outro vinho</button>
         <p class="dica" id="avulsa-resumo"></p>
         <div class="form-botoes"><button type="submit" class="btn-primario">Registrar venda</button></div>
       </form>
@@ -535,17 +533,16 @@
           <label>Adega <select name="pdv" id="baixa-pdv"></select></label>
         </div>
         <label>Motivo <select name="motivo" id="baixa-motivo"></select></label>
-        <label>Vinho <select name="sku" id="baixa-sku" required></select></label>
-        <label>De onde saiu a garrafa
+        <label>De onde saíram as garrafas
           <select name="origem" id="baixa-origem">
-            <option value="adega">Da adega (estava à venda na máquina)</option>
+            <option value="adega">Da adega (estavam à venda na máquina)</option>
             <option value="retaguarda">Da retaguarda (estoque guardado)</option>
           </select>
         </label>
-        <div class="form-linha">
-          <label>Quantidade <input name="qtd" type="number" min="1" step="1" inputmode="numeric" required value="1" /></label>
-          <label>Observação <input name="descricao" placeholder="Opcional: prova com cliente" /></label>
-        </div>
+        <label>Observação <input name="descricao" placeholder="Opcional: prova com cliente" /></label>
+        <div class="lote-rot">Vinhos desta baixa</div>
+        <div id="baixa-itens" class="lote-itens"></div>
+        <button type="button" class="btn-secundario lote-add" id="baixa-add">＋ Adicionar outro vinho</button>
         <p class="dica" id="baixa-resumo"></p>
         <div class="form-botoes"><button type="submit" class="btn-primario">Registrar baixa</button></div>
       </form>
