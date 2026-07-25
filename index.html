@@ -90,6 +90,10 @@
     </div>
     <div class="dre" id="fin-dre"></div>
     <div class="fin-secao">
+      <div class="fin-secao-topo"><h3>Vendas avulsas do período</h3><button class="btn-secundario" id="btn-add-avulsa">＋ Venda avulsa</button></div>
+      <div id="fin-avulsas" class="fin-despesas"></div>
+    </div>
+    <div class="fin-secao">
       <div class="fin-secao-topo"><h3>Despesas do período</h3><button class="btn-secundario" id="btn-add-despesa">＋ Despesa</button></div>
       <div id="fin-despesas" class="fin-despesas"></div>
     </div>
@@ -479,6 +483,36 @@
         </datalist>
         <label>Descrição <input name="descricao" placeholder="Opcional" /></label>
         <div class="form-botoes"><button type="submit" class="btn-primario">Salvar despesa</button></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ====================== MODAL: VENDA AVULSA ====================== -->
+  <div id="modal-avulsa" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-conteudo">
+      <div class="modal-topo">
+        <h2>Venda avulsa</h2>
+        <button class="modal-fechar" data-fecha aria-label="Fechar">✕</button>
+      </div>
+      <form id="form-avulsa" class="form">
+        <p class="dica">Para a venda que <b>não passou pela maquininha</b> (pix, encomenda de amigo). Entra no faturamento e baixa o estoque.</p>
+        <div class="form-linha">
+          <label>Data <input name="data" type="date" required /></label>
+          <label>Adega <select name="pdv" id="avulsa-pdv"></select></label>
+        </div>
+        <label>Vinho <select name="sku" id="avulsa-sku" required></select></label>
+        <label>De onde saiu a garrafa
+          <select name="origem" id="avulsa-origem">
+            <option value="avulsa-adega">Da adega (estava à venda na máquina)</option>
+            <option value="avulsa-retaguarda">Da retaguarda (estoque guardado)</option>
+          </select>
+        </label>
+        <div class="form-linha">
+          <label>Quantidade <input name="qtd" type="number" min="1" step="1" inputmode="numeric" required value="1" /></label>
+          <label>Preço por garrafa (R$) <input name="preco" type="number" min="0" step="0.01" inputmode="decimal" required placeholder="0,00" /></label>
+        </div>
+        <p class="dica" id="avulsa-resumo"></p>
+        <div class="form-botoes"><button type="submit" class="btn-primario">Registrar venda</button></div>
       </form>
     </div>
   </div>

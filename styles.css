@@ -349,8 +349,10 @@ body {
 
 .form { display: flex; flex-direction: column; gap: 12px; }
 .form label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--texto-suave); }
-.form-linha { display: flex; gap: 12px; }
-.form-linha label { flex: 1; }
+/* Campos lado a lado. Em tela estreita PRECISA quebrar linha: 3 campos de data
+   não cabem em 360px e o último ficava cortado na borda do modal. */
+.form-linha { display: flex; gap: 12px; flex-wrap: wrap; }
+.form-linha label { flex: 1 1 40%; min-width: 132px; }
 .form input, .form select, .form textarea {
   background: var(--card); border: 1px solid var(--card-borda); border-radius: 10px;
   padding: 11px 12px; color: var(--texto); font-size: 16px; outline: none; width: 100%;

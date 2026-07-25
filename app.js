@@ -308,9 +308,21 @@ function casarRotulo(linha) {
       const score = hits / q.length;
       if (score > melhorScore) { melhorScore = score; melhor = it; }
     }
-    if (melhor && melhorScore >= 0.6) return { item: melhor, forte: false };
+    if (melhor && melhorScore >= 0.6) return { item: melhor, forte: false, semelhanca: semelhancaRotulo(linha.nome, melhor.nome) };
   }
   return { item: null, forte: false };
+}
+// Semelhança entre dois nomes de rótulo, de 0 a 1 — SIMÉTRICA (coeficiente de
+// Dice sobre as palavras): 2×(palavras em comum) ÷ (total das duas listas).
+// O score do casamento automático acima é assimétrico (só divide pelas palavras
+// da venda), então "Malbec" × "Malbec Reserva Bodega Norton" dá 100% lá e 40%
+// aqui. Para MOSTRAR ao usuário vale a simétrica, que não engana.
+function semelhancaRotulo(a, b) {
+  const ta = tokensRot(a), tb = new Set(tokensRot(b));
+  if (!ta.length || !tb.size) return 0;
+  let comuns = 0;
+  new Set(ta).forEach((w) => { if (tb.has(w)) comuns++; });
+  return (2 * comuns) / (new Set(ta).size + tb.size);
 }
 
 // ======================================================================
@@ -429,9 +441,41 @@ async function aplicarImportVendas(periodo, pdv, resolvidos) {
 async function excluirVenda(venda) {
   const i = DADOS.vendas.indexOf(venda);
   if (i >= 0) DADOS.vendas.splice(i, 1);
-  if (venda.sku) garantirLinhaPdv(venda.sku, venda.pdv).qtd += Number(venda.qtd) || 0;
+  // Devolve a garrafa DE ONDE ELA SAIU (venda avulsa pode ter saído da retaguarda).
+  if (venda.sku) {
+    if (venda.origem === "avulsa-retaguarda") {
+      const it = DADOS.estoque.find((x) => x.sku === venda.sku);
+      if (it) it.qtd = (Number(it.qtd) || 0) + (Number(venda.qtd) || 0);
+    } else {
+      garantirLinhaPdv(venda.sku, venda.pdv).qtd += Number(venda.qtd) || 0;
+    }
+  }
   gravarLocal();
   if (online()) sincronizarFundo("excluirVenda", { venda });
+}
+// Registra uma venda que NÃO passou pelo sistema da adega (pix, encomenda).
+// O período é o próprio dia da venda e o preço é o que foi cobrado de fato.
+async function registrarVendaAvulsa(v) {
+  const it = DADOS.estoque.find((x) => x.sku === v.sku);
+  DADOS.vendas.push({
+    periodoInicio: v.data, periodoFim: v.data, importadoEm: v.data, pdv: v.pdv, sku: v.sku,
+    codigo: (it && it.codigo) || "", descricao: (it && it.nome) || "", categoria: (it && it.categoria) || "",
+    qtd: v.qtd, precoMedio: v.preco, valorVendido: v.preco * v.qtd, origem: v.origem,
+  });
+  if (v.origem === "avulsa-retaguarda") {
+    if (it) it.qtd = Math.max(0, (Number(it.qtd) || 0) - v.qtd);
+  } else {
+    const linha = garantirLinhaPdv(v.sku, v.pdv);
+    linha.qtd = Math.max(0, linha.qtd - v.qtd);
+  }
+  gravarLocal();
+  if (online()) {
+    sincronizarFundo("registrarVendaManual", { venda: {
+      data: v.data, pdv: v.pdv, sku: v.sku, qtd: v.qtd, precoMedio: v.preco,
+      valorVendido: v.preco * v.qtd, origem: v.origem,
+      codigo: (it && it.codigo) || "", descricao: (it && it.nome) || "", categoria: (it && it.categoria) || "",
+    } });
+  }
 }
 // Exclui TODAS as vendas de um período (pdv+início+fim) e devolve à adega.
 // Aguardado (via fila) porque é usado na SUBSTITUIÇÃO de período no import:
@@ -1207,7 +1251,10 @@ function isoMaisDias(iso, dias) {
 }
 // Períodos de vendas já importados numa adega (para evitar duplicidade).
 function periodosImportados(pdv) {
-  return periodosVendas().filter((p) => p.pdv === pdv)
+  // Só os períodos que vieram de RELATÓRIO importado: venda avulsa é de um dia
+  // só e não deve gerar alarme falso de "período sobreposto" na próxima
+  // importação, nem empurrar a data sugerida.
+  return periodosVendas(true).filter((p) => p.pdv === pdv)
     .map((p) => ({ inicio: p.inicio, fim: p.fim }))
     .sort((a, b) => String(a.inicio).localeCompare(String(b.inicio)));
 }
@@ -1374,7 +1421,19 @@ function atualizarJaImportados(pdv) {
   atualizarJaImportados($("#conf-vendas-pdv").value || pdvAtual);
 }));
 function estaNaAdega(sku, pdv) { return !!linhaPdv(sku, pdv); }
-// Opções de rótulo para relacionar uma venda: os DA ADEGA em destaque, depois os outros.
+// Os rótulos mais PARECIDOS com o nome da venda, com o % de semelhança.
+// Prioriza quem está na adega no desempate (é onde a garrafa deveria estar).
+const REL_SUG_MIN = 0.2;  // abaixo disso não é sugestão, é chute
+function sugestoesRotulo(nomeVenda, pdv, limite = 5) {
+  return (DADOS.estoque || [])
+    .map((it) => ({ it, s: semelhancaRotulo(nomeVenda, it.nome), naAdega: estaNaAdega(it.sku, pdv) }))
+    .filter((c) => c.s >= REL_SUG_MIN)
+    .sort((a, b) => (b.s - a.s) || (Number(b.naAdega) - Number(a.naAdega)) || String(a.it.nome).localeCompare(String(b.it.nome)))
+    .slice(0, limite);
+}
+// Opções de rótulo para relacionar uma venda: as SUGESTÕES (com % de semelhança)
+// no topo, depois os da adega e os outros em ordem alfabética — assim quem já
+// sabe o nome continua achando pela lista, e quem não sabe começa pelo palpite.
 function opcoesRotuloVendas(l, pdv) {
   const naAdega = [], outros = [];
   (DADOS.estoque || []).slice().sort((a, b) => String(a.nome).localeCompare(String(b.nome))).forEach((it) => {
@@ -1385,6 +1444,15 @@ function opcoesRotuloVendas(l, pdv) {
     (emAdega ? naAdega : outros).push(opt);
   });
   let html = "";
+  const sug = sugestoesRotulo(l.nome, pdv);
+  if (sug.length) {
+    html += `<optgroup label="Sugestões (parecidos com o nome da venda)">` + sug.map((c) => {
+      const sel = (!l.criarNovo && l.skuAlvo === c.it.sku) ? "selected" : "";
+      const rot = `${escaparHtml(c.it.nome || c.it.sku)} — ${Math.round(c.s * 100)}%` +
+        (c.naAdega ? ` (adega: ${qtdNoPdv(c.it.sku, pdv)})` : " (fora desta adega)");
+      return `<option value="${escaparAttr(c.it.sku)}" ${sel}>${rot}</option>`;
+    }).join("") + `</optgroup>`;
+  }
   if (naAdega.length) html += `<optgroup label="Nesta adega">${naAdega.join("")}</optgroup>`;
   if (outros.length) html += `<optgroup label="Outros rótulos (não estão nesta adega)">${outros.join("")}</optgroup>`;
   html += `<option value="__novo__" ${l.criarNovo ? "selected" : ""}>＋ Criar rótulo novo</option>`;
@@ -1396,11 +1464,15 @@ function renderConfVendas() {
   const totUn = inc.reduce((s, l) => s + (Number(l.qtd) || 0), 0);
   const totRs = inc.reduce((s, l) => s + (Number(l.valorVendido) || 0), 0);
   const pdv = $("#conf-vendas-pdv").value || confVendas.pdv;
-  // Uma venda "precisa de atenção" quando não bate com um rótulo QUE CONSTA NESTA ADEGA.
-  const precisa = (l) => l.incluir && (l.criarNovo || !l.skuAlvo || !estaNaAdega(l.skuAlvo, pdv));
+  // Uma venda "precisa de atenção" em 3 casos: (a) não achou rótulo nenhum,
+  // (b) achou um que NÃO consta nesta adega, ou (c) casou só por semelhança de
+  // nome (match fraco) — esse último é o mais perigoso, porque pode ser o vinho
+  // errado, e antes passava sem aviso quando o rótulo estava na adega.
+  const fraco = (l) => !l.criarNovo && l.skuAlvo && !l.forte && !l.manual;
+  const precisa = (l) => l.incluir && (l.criarNovo || !l.skuAlvo || !estaNaAdega(l.skuAlvo, pdv) || fraco(l));
   const nAviso = inc.filter(precisa).length;
   $("#conf-vendas-resumo").innerHTML = `<b>${inc.length}</b> rótulos · ${totUn} garrafas vendidas · ${brl(totRs)}`
-    + (nAviso ? `<div class="conf-aviso-topo">⚠ ${nAviso} ${nAviso === 1 ? "venda não bate" : "vendas não batem"} com um rótulo desta adega. Relacione abaixo, ou confirme criar rótulo novo.</div>` : "");
+    + (nAviso ? `<div class="conf-aviso-topo">⚠ ${nAviso} ${nAviso === 1 ? "venda precisa" : "vendas precisam"} de conferência. Confirme o rótulo abaixo (as sugestões vêm com o % de semelhança), ou confirme criar rótulo novo.</div>` : "");
   const cont = $("#conf-vendas-lista");
   cont.innerHTML = "";
   linhas.forEach((l, idx) => {
@@ -1408,13 +1480,15 @@ function renderConfVendas() {
     const naAdega = casou ? qtdNoPdv(l.skuAlvo, pdv) : 0;
     const ficará = Math.max(0, naAdega - (Number(l.qtd) || 0));
     const forte = l.forte || l.manual;
+    const sem = casou ? Math.round(semelhancaRotulo(l.nome, l.nomeAlvo) * 100) : 0;
     const badge = casou
-      ? `<span class="conf-badge ${forte ? "ok" : "fraco"}">→ ${escaparHtml(l.nomeAlvo)}${forte ? "" : " ?"}</span>`
+      ? `<span class="conf-badge ${forte ? "ok" : "fraco"}">→ ${escaparHtml(l.nomeAlvo)}${forte ? "" : ` ? ${sem}%`}</span>`
       : `<span class="conf-badge novo">＋ novo rótulo</span>`;
     const descHtml = casou && estaNaAdega(l.skuAlvo, pdv) ? `<span class="conf-desc">adega ${naAdega} → <b>${ficará}</b></span>` : "";
-    const aviso = precisa(l)
-      ? `<div class="conf-aviso">⚠ ${l.criarNovo || !l.skuAlvo ? "não bate com nenhum rótulo desta adega" : "esse rótulo não consta nesta adega"} — relacione:</div>`
-      : "";
+    const motivo = (l.criarNovo || !l.skuAlvo) ? "não bate com nenhum rótulo desta adega"
+      : fraco(l) ? `casou só por semelhança de nome (${sem}%) — confira se é mesmo este vinho`
+      : "esse rótulo não consta nesta adega";
+    const aviso = precisa(l) ? `<div class="conf-aviso">⚠ ${motivo} — relacione:</div>` : "";
     const div = el("div", "conf-linha" + (l.incluir ? "" : " off") + (precisa(l) ? " atencao" : ""));
     div.innerHTML = `
       <label class="conf-ck"><input type="checkbox" ${l.incluir ? "checked" : ""} data-i="${idx}" /></label>
@@ -1546,10 +1620,12 @@ $("#form-mover").addEventListener("submit", async (e) => {
 // ======================================================================
 //  RENDER — GIRO (o que saiu, por período importado)
 // ======================================================================
-function periodosVendas() {
+// Venda lançada à mão (pix, encomenda) em vez de vinda do relatório da adega.
+function vendaAvulsa(v) { return String((v && v.origem) || "").indexOf("avulsa") === 0; }
+function periodosVendas(soImportadas) {
   // Agrupa por (pdv|inicio|fim); devolve as chaves ordenadas do mais recente ao mais antigo.
   const mapa = {};
-  (DADOS.vendas || []).forEach((v) => {
+  (DADOS.vendas || []).filter((v) => !soImportadas || !vendaAvulsa(v)).forEach((v) => {
     const k = `${v.pdv}||${v.periodoInicio}||${v.periodoFim}`;
     (mapa[k] = mapa[k] || []).push(v);
   });
@@ -1615,6 +1691,34 @@ function renderGiro() {
     linhaDre("= Lucro bruto", lucroBruto, "dre-sub") +
     linhaDre("− Despesas", totDesp) +
     `<div class="dre-linha dre-total ${lucroLiquido >= 0 ? "lucro" : "prejuizo"}"><span>= Lucro líquido</span><b>${brl(lucroLiquido)}</b></div>`;
+
+  // Vendas avulsas do período (lançadas à mão, fora do sistema da adega).
+  const ca = $("#fin-avulsas");
+  if (ca) {
+    const avulsas = vendas.filter(vendaAvulsa);
+    ca.innerHTML = "";
+    if (!avulsas.length) {
+      ca.innerHTML = `<p class="dica">Nenhuma venda avulsa neste período. Use <b>＋ Venda avulsa</b> para lançar o que não passou pela maquininha (pix, encomenda).</p>`;
+    } else {
+      avulsas.slice().sort((a, b) => String(b.periodoInicio).localeCompare(String(a.periodoInicio))).forEach((v) => {
+        const it = DADOS.estoque.find((x) => x.sku === v.sku);
+        const daRet = v.origem === "avulsa-retaguarda";
+        const row = el("div", "despesa-row");
+        row.innerHTML = `
+          <div class="despesa-info">
+            <span class="despesa-cat">${escaparHtml((it && it.nome) || v.descricao || v.sku)}</span>
+            <span class="despesa-sub">${dataBR(v.periodoInicio)} · ${escaparHtml(v.pdv)} · ${Number(v.qtd) || 0} un. × ${brl(v.precoMedio)} · ${daRet ? "da retaguarda" : "da adega"}</span>
+          </div>
+          <span class="despesa-val">${brl(v.valorVendido)}</span>
+          <button class="despesa-x" aria-label="Excluir venda avulsa" title="Excluir venda avulsa">✕</button>`;
+        row.querySelector(".despesa-x").addEventListener("click", async () => {
+          if (!confirm(`Excluir esta venda avulsa de ${Number(v.qtd) || 0} un. (${brl(v.valorVendido)})?\n\nAs garrafas voltam para ${daRet ? "a retaguarda" : "a adega " + v.pdv}.`)) return;
+          await comProgresso(() => excluirVenda(v)); renderGiro(); toast("Venda avulsa excluída");
+        });
+        ca.appendChild(row);
+      });
+    }
+  }
 
   // Despesas do período.
   const cd = $("#fin-despesas");
@@ -1834,18 +1938,22 @@ function relMargem(ag) {
 
 function relPorPeriodo(vendas) {
   const mapa = {};
+  // As vendas avulsas são de um dia cada; juntar todas numa barra só evita
+  // encher o gráfico de barrinhas de 1 dia e mantém o total batendo com o topo.
   vendas.forEach((v) => {
-    const k = (v.periodoInicio || "") + "||" + (v.periodoFim || "");
-    const p = mapa[k] || (mapa[k] = { inicio: v.periodoInicio, fim: v.periodoFim, qtd: 0, valor: 0 });
+    const avulsa = vendaAvulsa(v);
+    const k = avulsa ? "__avulsas__" : (v.periodoInicio || "") + "||" + (v.periodoFim || "");
+    const p = mapa[k] || (mapa[k] = { avulsa, inicio: v.periodoInicio, fim: v.periodoFim, qtd: 0, valor: 0 });
     p.qtd += Number(v.qtd) || 0; p.valor += Number(v.valorVendido) || 0;
+    if (avulsa && String(v.periodoInicio) < String(p.inicio)) p.inicio = v.periodoInicio;
   });
-  const lista = Object.values(mapa).sort((a, b) => String(a.inicio).localeCompare(String(b.inicio)));
+  const lista = Object.values(mapa).sort((a, b) => Number(a.avulsa) - Number(b.avulsa) || String(a.inicio).localeCompare(String(b.inicio)));
   if (lista.length < 2) return ""; // um período só: o número do topo já diz tudo
   const max = Math.max.apply(null, lista.map((p) => p.valor));
   const corpo = lista.map((p) => relBarra(
-    escaparHtml(dataBR(p.inicio) + " a " + dataBR(p.fim)), brl(p.valor), p.valor, max,
-    `${p.qtd} garrafa${p.qtd === 1 ? "" : "s"}`)).join("");
-  return relSecao("Faturamento por período importado", corpo, "", "Cada barra é um relatório de vendas que você importou, em ordem de data.");
+    p.avulsa ? "Vendas avulsas (lançadas à mão)" : escaparHtml(dataBR(p.inicio) + " a " + dataBR(p.fim)),
+    brl(p.valor), p.valor, max, `${p.qtd} garrafa${p.qtd === 1 ? "" : "s"}`)).join("");
+  return relSecao("Faturamento por período", corpo, "", "Cada barra é um relatório de vendas importado, em ordem de data — e as vendas avulsas somadas à parte.");
 }
 
 function relPorAdega(vendas, pdvSel) {
@@ -1952,6 +2060,85 @@ $("#form-despesa").addEventListener("submit", async (e) => {
   if (despesa.valor <= 0) { toast("Informe o valor da despesa"); return; }
   await comProgresso(() => registrarDespesa(despesa));
   fechar("#modal-despesa"); renderGiro(); toast("Despesa registrada ✓");
+});
+
+// --- Modal: venda avulsa (fora do sistema da adega) ---------------------
+// Lista os vinhos com o disponível de cada lugar, para a sócia ver o que dá
+// para vender antes de escolher.
+function opcoesVinhoAvulsa(pdv, origem) {
+  const daRet = origem === "avulsa-retaguarda";
+  return (DADOS.estoque || []).slice()
+    .sort((a, b) => String(a.nome).localeCompare(String(b.nome)))
+    .map((it) => {
+      const disp = daRet ? (Number(it.qtd) || 0) : qtdNoPdv(it.sku, pdv);
+      return `<option value="${escaparAttr(it.sku)}">${escaparHtml(it.nome || it.sku)} — ${disp} ${daRet ? "na retaguarda" : "na adega"}</option>`;
+    }).join("");
+}
+// Preenche o preço sugerido e o total, e avisa se não há garrafa suficiente.
+function atualizarAvulsa() {
+  const f = $("#form-avulsa"); if (!f) return;
+  const sku = f.sku.value, pdv = f.pdv.value, origem = f.origem.value;
+  const daRet = origem === "avulsa-retaguarda";
+  const it = DADOS.estoque.find((x) => x.sku === sku);
+  const disp = daRet ? (it ? Number(it.qtd) || 0 : 0) : qtdNoPdv(sku, pdv);
+  const qtd = Number(f.qtd.value) || 0;
+  const preco = Number(f.preco.value) || 0;
+  const r = $("#avulsa-resumo");
+  if (!r) return;
+  if (qtd > disp) {
+    r.innerHTML = `⚠ Só há <b>${disp}</b> ${daRet ? "na retaguarda" : "nesta adega"} — o estoque não pode ficar negativo.`;
+    r.className = "dica conf-aviso";
+  } else {
+    r.innerHTML = `Total da venda: <b>${brl(preco * qtd)}</b> · sai de <b>${daRet ? "retaguarda" : pdv}</b> (${disp} → ${disp - qtd}).`;
+    r.className = "dica";
+  }
+}
+function abrirModalVendaAvulsa() {
+  if (!(DADOS.estoque || []).length) { toast("Cadastre um vinho no Estoque antes"); return; }
+  const f = $("#form-avulsa"); f.reset();
+  f.data.value = hojeISO();
+  const filtro = ($("#fin-pdv") && $("#fin-pdv").value) || "__todas__";
+  $("#avulsa-pdv").innerHTML = opcoesPdv();
+  $("#avulsa-pdv").value = (filtro && filtro !== "__todas__") ? filtro : pdvAtual;
+  f.origem.value = "avulsa-adega";
+  f.qtd.value = 1;
+  $("#avulsa-sku").innerHTML = opcoesVinhoAvulsa(f.pdv.value, f.origem.value);
+  // Sugere o preço que aquele vinho tem na adega (editável — venda avulsa
+  // costuma sair por outro valor).
+  f.preco.value = precoVendaNoPdv(f.sku.value, f.pdv.value) || "";
+  atualizarAvulsa();
+  abrir("#modal-avulsa");
+}
+$("#btn-add-avulsa").addEventListener("click", abrirModalVendaAvulsa);
+["#avulsa-pdv", "#avulsa-origem"].forEach((s) => $(s).addEventListener("change", () => {
+  const f = $("#form-avulsa");
+  const antes = f.sku.value;
+  $("#avulsa-sku").innerHTML = opcoesVinhoAvulsa(f.pdv.value, f.origem.value);
+  if (antes && [...f.sku.options].some((o) => o.value === antes)) f.sku.value = antes;
+  f.preco.value = precoVendaNoPdv(f.sku.value, f.pdv.value) || f.preco.value;
+  atualizarAvulsa();
+}));
+$("#avulsa-sku").addEventListener("change", () => {
+  const f = $("#form-avulsa");
+  f.preco.value = precoVendaNoPdv(f.sku.value, f.pdv.value) || f.preco.value;
+  atualizarAvulsa();
+});
+["qtd", "preco"].forEach((n) => $("#form-avulsa")[n].addEventListener("input", atualizarAvulsa));
+$("#form-avulsa").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const v = {
+    data: f.data.value || hojeISO(), pdv: f.pdv.value, sku: f.sku.value, origem: f.origem.value,
+    qtd: Math.floor(Number(f.qtd.value) || 0), preco: Number(f.preco.value) || 0,
+  };
+  if (!v.sku) { toast("Escolha o vinho"); return; }
+  if (v.qtd <= 0) { toast("Informe a quantidade"); return; }
+  if (v.preco <= 0) { toast("Informe o preço por garrafa"); return; }
+  const it = DADOS.estoque.find((x) => x.sku === v.sku);
+  const disp = v.origem === "avulsa-retaguarda" ? (it ? Number(it.qtd) || 0 : 0) : qtdNoPdv(v.sku, v.pdv);
+  if (v.qtd > disp) { toast(`Só há ${disp} disponível — ajuste a quantidade`); return; }
+  await comProgresso(() => registrarVendaAvulsa(v));
+  fechar("#modal-avulsa"); renderGiro(); toast("Venda avulsa registrada ✓");
 });
 
 // ======================================================================
