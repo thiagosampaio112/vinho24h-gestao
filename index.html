@@ -81,17 +81,24 @@
     </div>
   </section>
 
-  <!-- ====================== ABA: GIRO (vendas por período) ====================== -->
+  <!-- ====================== ABA: FINANCEIRO (faturamento, despesas, lucro líquido) ====================== -->
   <section id="aba-giro" class="aba hidden">
-    <div class="painel-resumo" id="giro-painel"></div>
-    <div class="giro-topo">
-      <select id="giro-periodo" class="giro-select" aria-label="Período"></select>
-      <button class="btn-secundario btn-importar">📊 Importar</button>
-      <button class="btn-perigo btn-icone hidden" id="btn-excluir-periodo" title="Excluir este período de vendas">🗑</button>
+    <div class="fin-controles">
+      <label class="fin-campo">Adega <select id="fin-pdv"></select></label>
+      <label class="fin-campo">De <input id="fin-de" type="date" /></label>
+      <label class="fin-campo">Até <input id="fin-ate" type="date" /></label>
     </div>
-    <main id="giro-lista" class="giro-lista"></main>
+    <div class="dre" id="fin-dre"></div>
+    <div class="fin-secao">
+      <div class="fin-secao-topo"><h3>Despesas do período</h3><button class="btn-secundario" id="btn-add-despesa">＋ Despesa</button></div>
+      <div id="fin-despesas" class="fin-despesas"></div>
+    </div>
+    <div class="fin-secao">
+      <div class="fin-secao-topo"><h3>Vendas (giro)</h3><button class="btn-secundario btn-importar">📊 Importar</button></div>
+      <main id="giro-lista" class="giro-lista"></main>
+    </div>
     <div id="vazio-giro" class="vazio hidden">
-      <p>Nenhuma venda importada ainda.<br />Baixe o relatório <b>"Total de vendas por produto"</b> do sistema da adega e toque em <b>Importar vendas</b>.</p>
+      <p>Sem vendas neste período.<br />Baixe o relatório <b>"Total de vendas por produto"</b> do sistema da adega e toque em <b>Importar</b>, ou ajuste as datas acima.</p>
     </div>
   </section>
 
@@ -126,7 +133,7 @@
       <span class="nav-ico">🏷️</span><span>Preços</span>
     </button>
     <button class="nav-btn" data-aba="giro">
-      <span class="nav-ico">📊</span><span>Giro</span>
+      <span class="nav-ico">📊</span><span>Financeiro</span>
     </button>
     <button class="nav-btn" data-aba="guia">
       <span class="nav-ico">📖</span><span>Guia</span>
@@ -425,6 +432,37 @@
         </div>
         <p class="dica" id="mover-disp"></p>
         <div class="form-botoes"><button type="submit" class="btn-primario">Mover</button></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ====================== MODAL: DESPESA ====================== -->
+  <div id="modal-despesa" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-conteudo">
+      <div class="modal-topo">
+        <h2>Nova despesa</h2>
+        <button class="modal-fechar" data-fecha aria-label="Fechar">✕</button>
+      </div>
+      <form id="form-despesa" class="form">
+        <div class="form-linha">
+          <label>Data <input name="data" type="date" required /></label>
+          <label>Valor (R$) <input name="valor" type="number" min="0" step="0.01" inputmode="decimal" required placeholder="0,00" /></label>
+        </div>
+        <label>Adega <select name="pdv" id="despesa-pdv"></select></label>
+        <label>Categoria <input name="categoria" list="lista-categorias-despesa" placeholder="Ex.: Aluguel do ponto" /></label>
+        <datalist id="lista-categorias-despesa">
+          <option value="Aluguel do ponto"></option>
+          <option value="Taxa AMLabs / TouchPay"></option>
+          <option value="Energia"></option>
+          <option value="Internet"></option>
+          <option value="Impostos"></option>
+          <option value="Comissão"></option>
+          <option value="Insumos / manutenção"></option>
+          <option value="Marketing"></option>
+          <option value="Outros"></option>
+        </datalist>
+        <label>Descrição <input name="descricao" placeholder="Opcional" /></label>
+        <div class="form-botoes"><button type="submit" class="btn-primario">Salvar despesa</button></div>
       </form>
     </div>
   </div>

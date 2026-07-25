@@ -131,6 +131,8 @@ function normalizarDados() {
   DADOS.vigiados = DADOS.vigiados || []; DADOS.precos = DADOS.precos || []; DADOS.lojas = DADOS.lojas || [];
   DADOS.pdvs = DADOS.pdvs || []; DADOS.pdvEstoque = DADOS.pdvEstoque || []; DADOS.vendas = DADOS.vendas || [];
   DADOS.guia = DADOS.guia || []; // vinhos do guia do QR (editados por aqui, lidos pela planilha do guia)
+  DADOS.despesas = DADOS.despesas || []; // despesas por adega (Fase 5)
+  DADOS.despesas.forEach((d) => { d.valor = Number(d.valor) || 0; });
   // Sempre há ao menos uma adega. A 1ª ativa é a "adega atual" da tela.
   if (!DADOS.pdvs.length) DADOS.pdvs = [{ nome: "Ecopark", ativo: "sim" }];
   const ativas = pdvsAtivos();
@@ -223,6 +225,18 @@ async function excluirCompra(compra) {
   const linha = compra.__row;
   const i = DADOS.compras.indexOf(compra); if (i >= 0) DADOS.compras.splice(i, 1); gravarLocal();
   if (online()) sincronizarFundo("excluirCompra", { linha });
+}
+
+// --- Despesas (Fase 5): por adega, para o cálculo do lucro líquido ---
+async function registrarDespesa(despesa) {
+  DADOS.despesas.unshift(despesa); gravarLocal();
+  if (online()) sincronizarFundo("registrarDespesa", { despesa });
+}
+async function excluirDespesa(despesa) {
+  const linha = despesa.__row;
+  const i = DADOS.despesas.indexOf(despesa); if (i >= 0) DADOS.despesas.splice(i, 1);
+  gravarLocal();
+  if (online() && linha) sincronizarFundo("excluirDespesa", { linha });
 }
 
 // --- Lojas de confiança (radar de preço, Fase 3B) ---
@@ -1514,75 +1528,136 @@ function periodosVendas() {
     return { chave: k, pdv, inicio, fim, linhas: mapa[k] };
   }).sort((a, b) => String(b.fim).localeCompare(String(a.fim)));
 }
-let giroPeriodo = null; // chave do período selecionado
-function renderGiro() {
-  const periodos = periodosVendas();
-  const sel = $("#giro-periodo");
-  const vazio = $("#vazio-giro");
-  const btnEx = $("#btn-excluir-periodo");
-  if (!periodos.length) {
-    vazio.classList.remove("hidden");
-    $("#giro-painel").innerHTML = ""; $("#giro-lista").innerHTML = "";
-    if (sel) sel.innerHTML = "";
-    if (btnEx) btnEx.classList.add("hidden");
-    return;
-  }
-  vazio.classList.add("hidden");
-  if (!giroPeriodo || !periodos.some((p) => p.chave === giroPeriodo)) giroPeriodo = periodos[0].chave;
-  sel.innerHTML = periodos.map((p) => `<option value="${escaparAttr(p.chave)}" ${p.chave === giroPeriodo ? "selected" : ""}>${escaparHtml(p.pdv)} · ${dataBR(p.inicio)}–${dataBR(p.fim)}</option>`).join("");
-  const per = periodos.find((p) => p.chave === giroPeriodo);
-  if (btnEx) {
-    btnEx.classList.remove("hidden");
-    btnEx.onclick = async () => {
-      const n = per.linhas.length;
-      if (!confirm(`Excluir as ${n} ${n === 1 ? "venda" : "vendas"} deste período?\n(${escaparHtml(per.pdv)} · ${dataBR(per.inicio)}–${dataBR(per.fim)})\n\nAs garrafas voltam para a adega.`)) return;
-      await comProgresso(() => excluirVendasPeriodo(per.pdv, per.inicio, per.fim));
-      giroPeriodo = null; await recarregarDoServidor(); toast("Período de vendas excluído");
-    };
-  }
-  const linhas = per.linhas.slice().sort((a, b) => (Number(b.qtd) || 0) - (Number(a.qtd) || 0));
-  const totUn = linhas.reduce((s, l) => s + (Number(l.qtd) || 0), 0);
-  const totRs = linhas.reduce((s, l) => s + (Number(l.valorVendido) || 0), 0);
-  // Lucro estimado: (preço médio de venda − custo de aquisição) × qtd, quando sabemos o custo.
-  let lucro = 0, temCusto = false;
-  linhas.forEach((l) => {
-    const it = DADOS.estoque.find((x) => x.sku === l.sku);
-    const custo = it ? (Number(it.precoAquisicao) || 0) : 0;
-    if (custo > 0) { temCusto = true; lucro += ((Number(l.precoMedio) || 0) - custo) * (Number(l.qtd) || 0); }
+// --- PAINEL FINANCEIRO (aba "Financeiro"; internamente ainda data-aba="giro") ---
+function finRange() {
+  return { de: $("#fin-de") ? $("#fin-de").value : "", ate: $("#fin-ate") ? $("#fin-ate").value : "", pdv: ($("#fin-pdv") && $("#fin-pdv").value) || "__todas__" };
+}
+function vendasNoRange(de, ate, pdv) {
+  return (DADOS.vendas || []).filter((v) => {
+    if (pdv !== "__todas__" && v.pdv !== pdv) return false;
+    return (!de || String(v.periodoFim) >= de) && (!ate || String(v.periodoInicio) <= ate); // período sobrepõe a faixa
   });
-  $("#giro-painel").innerHTML = `
-    <div class="resumo-caixa"><span class="num">${totUn}</span><span class="rot">vendidas</span></div>
-    <div class="resumo-caixa"><span class="num">${brl(totRs)}</span><span class="rot">faturamento</span></div>
-    <div class="resumo-caixa ${temCusto ? "" : "vazia"}"><span class="num">${temCusto ? brl(lucro) : "—"}</span><span class="rot">lucro estim.</span></div>`;
+}
+function despesasNoRange(de, ate, pdv) {
+  return (DADOS.despesas || []).filter((d) => {
+    if (pdv !== "__todas__" && d.pdv !== pdv) return false;
+    return (!de || String(d.data) >= de) && (!ate || String(d.data) <= ate);
+  });
+}
+function renderGiro() {
+  // Seletor de adega (Todas + ativas), preservando a escolha.
+  const selP = $("#fin-pdv");
+  if (selP) {
+    const prev = selP.value;
+    selP.innerHTML = `<option value="__todas__">Todas as adegas</option>` +
+      pdvsAtivos().map((p) => `<option value="${escaparAttr(p.nome)}">${escaparHtml(p.nome)}</option>`).join("");
+    selP.value = (prev && [...selP.options].some((o) => o.value === prev)) ? prev : "__todas__";
+  }
+  // Datas padrão na 1ª vez: abrange todas as vendas (ou últimos 30 dias).
+  const vTodas = DADOS.vendas || [];
+  if ($("#fin-de") && !$("#fin-de").value) {
+    const ini = vTodas.map((v) => v.periodoInicio).filter(Boolean).sort();
+    $("#fin-de").value = ini[0] || isoMenosDias(30);
+  }
+  if ($("#fin-ate") && !$("#fin-ate").value) {
+    const fim = vTodas.map((v) => v.periodoFim).filter(Boolean).sort();
+    $("#fin-ate").value = fim[fim.length - 1] || hojeISO();
+  }
+  const { de, ate, pdv } = finRange();
+  const vendas = vendasNoRange(de, ate, pdv);
+  const desp = despesasNoRange(de, ate, pdv);
+
+  // DRE: Faturamento − Custo dos produtos = Lucro bruto − Despesas = Lucro líquido.
+  const faturamento = vendas.reduce((s, v) => s + (Number(v.valorVendido) || 0), 0);
+  let cmv = 0;
+  vendas.forEach((v) => {
+    const it = DADOS.estoque.find((x) => x.sku === v.sku);
+    const custo = it ? (Number(it.precoAquisicao) || 0) : 0;
+    cmv += custo * (Number(v.qtd) || 0);
+  });
+  const lucroBruto = faturamento - cmv;
+  const totDesp = desp.reduce((s, d) => s + (Number(d.valor) || 0), 0);
+  const lucroLiquido = lucroBruto - totDesp;
+  const linhaDre = (rot, val, cls) => `<div class="dre-linha ${cls || ""}"><span>${rot}</span><b>${brl(val)}</b></div>`;
+  $("#fin-dre").innerHTML =
+    linhaDre("Faturamento", faturamento) +
+    linhaDre("− Custo dos produtos", cmv) +
+    linhaDre("= Lucro bruto", lucroBruto, "dre-sub") +
+    linhaDre("− Despesas", totDesp) +
+    `<div class="dre-linha dre-total ${lucroLiquido >= 0 ? "lucro" : "prejuizo"}"><span>= Lucro líquido</span><b>${brl(lucroLiquido)}</b></div>`;
+
+  // Despesas do período.
+  const cd = $("#fin-despesas");
+  cd.innerHTML = "";
+  if (!desp.length) {
+    cd.innerHTML = `<p class="dica">Nenhuma despesa neste período. Toque em ＋ Despesa.</p>`;
+  } else {
+    desp.slice().sort((a, b) => String(b.data).localeCompare(String(a.data))).forEach((d) => {
+      const row = el("div", "despesa-row");
+      row.innerHTML = `
+        <div class="despesa-info">
+          <span class="despesa-cat">${escaparHtml(d.categoria || "Despesa")}</span>
+          <span class="despesa-sub">${dataBR(d.data)}${d.pdv ? " · " + escaparHtml(d.pdv) : " · geral"}${d.descricao ? " · " + escaparHtml(d.descricao) : ""}</span>
+        </div>
+        <span class="despesa-val">${brl(d.valor)}</span>
+        <button class="despesa-x" aria-label="Excluir despesa" title="Excluir despesa">✕</button>`;
+      row.querySelector(".despesa-x").addEventListener("click", async () => {
+        if (!confirm(`Excluir a despesa "${d.categoria || ""}" de ${brl(d.valor)}?`)) return;
+        await comProgresso(() => excluirDespesa(d)); renderGiro(); toast("Despesa excluída");
+      });
+      cd.appendChild(row);
+    });
+  }
+
+  // Ranking de vendas (o que girou) no período.
+  const porSku = {};
+  vendas.forEach((v) => {
+    const k = v.sku || v.descricao;
+    const a = porSku[k] || (porSku[k] = { sku: v.sku, descricao: v.descricao, qtd: 0, valor: 0 });
+    a.qtd += Number(v.qtd) || 0; a.valor += Number(v.valorVendido) || 0;
+  });
   const cont = $("#giro-lista");
   cont.innerHTML = "";
-  linhas.forEach((l) => {
-    const it = DADOS.estoque.find((x) => x.sku === l.sku);
-    const naAdega = it ? qtdNoPdv(l.sku, per.pdv) : 0;
+  $("#vazio-giro").classList.toggle("hidden", vendas.length > 0 || desp.length > 0);
+  Object.values(porSku).sort((a, b) => b.qtd - a.qtd).forEach((a) => {
+    const it = DADOS.estoque.find((x) => x.sku === a.sku);
+    const precoMedio = a.qtd ? a.valor / a.qtd : 0;
     const custo = it ? (Number(it.precoAquisicao) || 0) : 0;
-    const margem = custo > 0 ? (Number(l.precoMedio) || 0) - custo : null;
+    const margem = custo > 0 ? precoMedio - custo : null;
     const card = el("div", "giro-item");
     card.innerHTML = `
       <div class="giro-info">
-        <div class="giro-nome">${escaparHtml(it ? it.nome : l.descricao)}</div>
+        <div class="giro-nome">${escaparHtml(it ? it.nome : a.descricao)}</div>
         <div class="giro-meta">
-          <span>Médio: <b>${brl(l.precoMedio)}</b></span>
-          ${margem != null ? `<span class="${margem >= 0 ? "lucro" : "prejuizo"}">Margem: <b>${brl(margem)}</b></span>` : ""}
-          <span>Na adega: <b>${naAdega}</b></span>
+          <span>Faturou: <b>${brl(a.valor)}</b></span>
+          ${margem != null ? `<span class="${margem >= 0 ? "lucro" : "prejuizo"}">Margem/un: <b>${brl(margem)}</b></span>` : ""}
         </div>
       </div>
-      <div class="giro-qtd"><span class="giro-num">${Number(l.qtd) || 0}</span><small>vendidas</small></div>
-      <button class="giro-x" aria-label="Excluir esta venda" title="Excluir esta venda">✕</button>`;
-    card.querySelector(".giro-x").addEventListener("click", async () => {
-      const q = Number(l.qtd) || 0;
-      if (!confirm(`Excluir esta venda de "${it ? it.nome : l.descricao}"?\n${q} ${q === 1 ? "garrafa volta" : "garrafas voltam"} para a adega.`)) return;
-      await comProgresso(() => excluirVenda(l));
-      await recarregar(); toast("Venda excluída");
-    });
+      <div class="giro-qtd"><span class="giro-num">${a.qtd}</span><small>vendidas</small></div>`;
     cont.appendChild(card);
   });
 }
-$("#giro-periodo") && $("#giro-periodo").addEventListener("change", (e) => { giroPeriodo = e.target.value; renderGiro(); });
+["#fin-pdv", "#fin-de", "#fin-ate"].forEach((s) => { const el0 = $(s); if (el0) el0.addEventListener("change", renderGiro); });
+
+// --- Modal: registrar despesa ---
+function abrirModalDespesa() {
+  const f = $("#form-despesa"); f.reset();
+  f.data.value = hojeISO();
+  const filtro = ($("#fin-pdv") && $("#fin-pdv").value) || "__todas__";
+  $("#despesa-pdv").innerHTML = pdvsAtivos().map((p) => `<option value="${escaparAttr(p.nome)}">${escaparHtml(p.nome)}</option>`).join("")
+    + `<option value="">Geral (todas)</option>`;
+  $("#despesa-pdv").value = (filtro && filtro !== "__todas__") ? filtro : pdvAtual;
+  abrir("#modal-despesa");
+}
+$("#btn-add-despesa").addEventListener("click", abrirModalDespesa);
+$("#form-despesa").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const despesa = { data: f.data.value || hojeISO(), pdv: f.pdv.value, categoria: f.categoria.value.trim() || "Despesa", descricao: f.descricao.value.trim(), valor: Number(f.valor.value) || 0 };
+  if (despesa.valor <= 0) { toast("Informe o valor da despesa"); return; }
+  await comProgresso(() => registrarDespesa(despesa));
+  fechar("#modal-despesa"); renderGiro(); toast("Despesa registrada ✓");
+});
 
 // ======================================================================
 //  GUIA DO QR — editar o conteúdo que o cliente vê na porta da adega

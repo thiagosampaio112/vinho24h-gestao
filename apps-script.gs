@@ -29,6 +29,7 @@ var ABA_LOJAS = "Lojas";         // Fase 3B: lojas de confiança extras (além d
 var ABA_PDVS = "Pdvs";           // Fase 4: pontos de venda (adegas)
 var ABA_PDV_ESTOQUE = "PdvEstoque"; // Fase 4: quantidade de cada rótulo em cada adega
 var ABA_VENDAS = "Vendas";       // Fase 4: histórico de vendas por período (giro)
+var ABA_DESPESAS = "Despesas";   // Fase 5: despesas por adega (para o lucro líquido)
 
 // Colunas de cada aba. As colunas novas da Fase 4 (codigo, codigoBarras, categoria,
 // precoVenda) ficam NO FIM da lista do estoque — assim o "auto-heal" só as ACRESCENTA
@@ -41,6 +42,7 @@ var COL_LOJAS = ["nome","url","ativo"];
 var COL_PDVS = ["nome","ativo","obs","precoPadrao"];
 var COL_PDV_ESTOQUE = ["pdv","sku","qtd","minimo","nivelPar","precoVenda"];
 var COL_VENDAS = ["periodoInicio","periodoFim","importadoEm","pdv","sku","codigo","descricao","categoria","qtd","precoMedio","valorVendido"];
+var COL_DESPESAS = ["data","pdv","categoria","descricao","valor"];
 
 // ---------------------------------------------------------------- utilidades
 function _prop(nome) { return PropertiesService.getScriptProperties().getProperty(nome) || ""; }
@@ -129,11 +131,16 @@ function doGet(e) {
       });
       return r;
     });
+    var despesas = _lerAba(ABA_DESPESAS, COL_DESPESAS).map(function (r) {
+      r.valor = _num(r.valor);
+      if (r.data instanceof Date) r.data = Utilities.formatDate(r.data, "GMT", "yyyy-MM-dd");
+      return r;
+    });
     var guia = [];
     var pg = (e && e.parameter) ? e.parameter : {};
     try { guia = lerGuia(pg.guiaId, pg.guiaGid).guia; } catch (eg) { guia = []; } // nunca deixa o guia quebrar a carga
     return _json({ estoque: estoque, compras: compras, fornecedores: fornecedores, precos: precos, lojas: lojas,
-      pdvs: pdvs, pdvEstoque: pdvEstoque, vendas: vendas, guia: guia });
+      pdvs: pdvs, pdvEstoque: pdvEstoque, vendas: vendas, despesas: despesas, guia: guia });
   } catch (err) {
     return _json({ erro: String(err.message || err) });
   }
@@ -160,6 +167,8 @@ function doPost(e) {
       case "ajustarPrecoPdv":  r = ajustarPrecoPdv(body.sku, body.pdv, body.preco); break;
       case "importarPlanograma": r = importarPlanograma(body.pdv, body.itens); break;
       case "importarVendas":   r = importarVendas(body.periodoInicio, body.periodoFim, body.pdv, body.itens); break;
+      case "registrarDespesa": r = registrarDespesa(body.despesa); break;
+      case "excluirDespesa":   r = excluirDespesa(body.linha); break;
       case "excluirVenda":     r = excluirVenda(body.venda); break;
       case "excluirVendasPeriodo": r = excluirVendasPeriodo(body.pdv, body.periodoInicio, body.periodoFim); break;
       case "salvarVinhoGuia":  r = salvarVinhoGuia(body.vinho, body.idOriginal, body.guiaId, body.guiaGid); break;
@@ -235,6 +244,20 @@ function excluirCompra(linha) {
   linha = parseInt(linha, 10);
   if (!linha || linha < 2) throw new Error("Compra inválida.");
   var sh = _aba(ABA_COMPRAS, COL_COMPRAS);
+  if (linha <= sh.getLastRow()) sh.deleteRow(linha);
+  return { ok: true };
+}
+
+// Despesas (Fase 5): registra e exclui despesas por adega (para o lucro líquido).
+function registrarDespesa(despesa) {
+  var sh = _aba(ABA_DESPESAS, COL_DESPESAS);
+  sh.appendRow(_objParaLinha(despesa || {}, COL_DESPESAS));
+  return { ok: true };
+}
+function excluirDespesa(linha) {
+  linha = parseInt(linha, 10);
+  if (!linha || linha < 2) throw new Error("Despesa inválida.");
+  var sh = _aba(ABA_DESPESAS, COL_DESPESAS);
   if (linha <= sh.getLastRow()) sh.deleteRow(linha);
   return { ok: true };
 }
