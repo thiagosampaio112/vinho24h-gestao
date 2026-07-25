@@ -1669,6 +1669,271 @@ function renderGiro() {
 }
 ["#fin-pdv", "#fin-de", "#fin-ate"].forEach((s) => { const el0 = $(s); if (el0) el0.addEventListener("change", renderGiro); });
 
+// ======================================================================
+//  ABA RELATÓRIOS — análises de vendas com gráficos
+//  Sem biblioteca externa: todo gráfico é uma BARRA HORIZONTAL em CSS.
+//  Regras de leitura adotadas:
+//   · o valor está sempre ESCRITO ao lado do rótulo (a barra só dá a
+//     leitura rápida) — nenhuma informação depende de cor ou de passar
+//     o mouse, o que também resolve o uso no celular;
+//   · uma série = uma cor (dourado). Verde/vermelho só significam
+//     lucro/prejuízo, nunca "categoria";
+//   · um único conjunto de filtros (adega + período) no topo vale para
+//     TODOS os blocos abaixo.
+// ======================================================================
+let relOrdemGiro = "qtd";      // qtd | valor
+let relOrdemMargem = "lucro";  // lucro | unidade | percentual
+const REL_TOPO = 10;           // quantos rótulos cada ranking mostra
+
+function relRange() {
+  return { de: $("#rel-de") ? $("#rel-de").value : "", ate: $("#rel-ate") ? $("#rel-ate").value : "", pdv: ($("#rel-pdv") && $("#rel-pdv").value) || "__todas__" };
+}
+const relPct = (n) => (Number(n) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 1 }) + "%";
+
+// Agrega as vendas do período por rótulo e calcula custo/lucro quando o
+// rótulo tem preço de aquisição cadastrado (sem custo → fica fora do lucro).
+function relAgregarPorSku(vendas) {
+  const mapa = {};
+  vendas.forEach((v) => {
+    const k = v.sku || "desc:" + normTexto(v.descricao);
+    const a = mapa[k] || (mapa[k] = { sku: v.sku, descricao: v.descricao, categoria: v.categoria, qtd: 0, valor: 0 });
+    a.qtd += Number(v.qtd) || 0;
+    a.valor += Number(v.valorVendido) || 0;
+    if (!a.categoria && v.categoria) a.categoria = v.categoria;
+  });
+  return Object.values(mapa).map((a) => {
+    const it = a.sku ? DADOS.estoque.find((x) => x.sku === a.sku) : null;
+    const custo = it ? Number(it.precoAquisicao) || 0 : 0;
+    const precoMedio = a.qtd ? a.valor / a.qtd : 0;
+    const temCusto = custo > 0;
+    return Object.assign(a, {
+      nome: (it && it.nome) || a.descricao || "(sem nome)",
+      tipo: (it && it.tipo) || tipoDoRotulo(a.categoria),
+      custo, precoMedio, temCusto,
+      cmv: temCusto ? custo * a.qtd : 0,
+      margemUn: temCusto ? precoMedio - custo : null,
+      lucro: temCusto ? (precoMedio - custo) * a.qtd : null,
+      // Margem sobre a venda: quanto de cada real vendido sobrou antes das despesas.
+      margemPct: temCusto && precoMedio > 0 ? ((precoMedio - custo) / precoMedio) * 100 : null,
+    });
+  });
+}
+
+// --- Peças visuais -----------------------------------------------------
+// `rotulo`/`extra` chegam como HTML já escapado por quem chama.
+function relBarra(rotulo, valorTexto, valor, maximo, extra, cls) {
+  const pct = maximo > 0 ? Math.max(0, Math.min(100, (Number(valor) || 0) / maximo * 100)) : 0;
+  return `<div class="rel-barra">
+      <div class="rel-barra-topo"><span class="rel-barra-rot">${rotulo}</span><b class="rel-barra-val ${cls || ""}">${valorTexto}</b></div>
+      <div class="rel-barra-trilha"><span class="rel-barra-fill" style="width:${pct.toFixed(1)}%"></span></div>
+      ${extra ? `<div class="rel-barra-extra">${extra}</div>` : ""}
+    </div>`;
+}
+function relSecao(titulo, corpo, chips, dica) {
+  if (!corpo) return "";
+  return `<section class="rel-secao">
+      <div class="rel-secao-topo"><h3>${titulo}</h3>${chips || ""}</div>
+      ${dica ? `<p class="dica rel-dica">${dica}</p>` : ""}
+      ${corpo}
+    </section>`;
+}
+function relChips(grupo, opcoes, atual) {
+  return `<div class="filtros rel-chips">` + opcoes.map((o) =>
+    `<button type="button" class="chip ${o.v === atual ? "ativo" : ""}" data-rel-grupo="${grupo}" data-rel-valor="${escaparAttr(o.v)}">${escaparHtml(o.rot)}</button>`).join("") + `</div>`;
+}
+function relKpi(rot, val, cls) {
+  return `<div class="rel-kpi"><span class="rel-kpi-rot">${escaparHtml(rot)}</span><b class="rel-kpi-num ${cls || ""}">${val}</b></div>`;
+}
+
+// --- Blocos ------------------------------------------------------------
+function relResumo(ag) {
+  const qtd = ag.reduce((s, a) => s + a.qtd, 0);
+  const fat = ag.reduce((s, a) => s + a.valor, 0);
+  const comCusto = ag.filter((a) => a.temCusto);
+  const cmv = comCusto.reduce((s, a) => s + a.cmv, 0);
+  const fatComCusto = comCusto.reduce((s, a) => s + a.valor, 0);
+  const lucro = fatComCusto - cmv;
+  const margem = fatComCusto > 0 ? lucro / fatComCusto * 100 : null;
+  const semCusto = ag.length - comCusto.length;
+  return `<section class="rel-secao">
+      <div class="rel-hero">
+        <span class="rel-hero-rot">Faturamento no período</span>
+        <strong class="rel-hero-num">${brl(fat)}</strong>
+      </div>
+      <div class="rel-kpis">
+        ${relKpi("Garrafas vendidas", qtd)}
+        ${relKpi("Lucro bruto", brl(lucro), lucro >= 0 ? "lucro" : "prejuizo")}
+        ${relKpi("Margem média", margem == null ? "—" : relPct(margem))}
+        ${relKpi("Média por garrafa", brl(qtd ? fat / qtd : 0))}
+      </div>
+      ${semCusto ? `<p class="dica rel-dica">⚠ ${semCusto} rótulo${semCusto > 1 ? "s" : ""} sem <b>preço de aquisição</b> cadastrado ${semCusto > 1 ? "ficam" : "fica"} fora do lucro e da margem. Cadastre o custo no Estoque para a conta fechar.</p>` : ""}
+    </section>`;
+}
+
+function relPorTipo(ag) {
+  const tipos = {};
+  ag.forEach((a) => {
+    const t = tipos[a.tipo] || (tipos[a.tipo] = { tipo: a.tipo, qtd: 0, valor: 0 });
+    t.qtd += a.qtd; t.valor += a.valor;
+  });
+  const lista = Object.values(tipos).sort((a, b) => b.qtd - a.qtd);
+  if (lista.length < 2) return ""; // uma categoria só não é gráfico
+  const fatTotal = lista.reduce((s, t) => s + t.valor, 0);
+  const maxQtd = Math.max.apply(null, lista.map((t) => t.qtd));
+  const corpo = lista.map((t) => relBarra(
+    `<span class="tag-tipo ${classeTipo(t.tipo)}">${escaparHtml(t.tipo)}</span>`,
+    `${t.qtd} garrafa${t.qtd === 1 ? "" : "s"}`, t.qtd, maxQtd,
+    `Faturou ${escaparHtml(brl(t.valor))} · ${escaparHtml(relPct(fatTotal > 0 ? t.valor / fatTotal * 100 : 0))} do faturamento`)).join("");
+  return relSecao("Vendas por tipo", corpo, "", "Quantas garrafas de cada tipo saíram no período.");
+}
+
+function relGiro(ag) {
+  if (!ag.length) return "";
+  const porValor = relOrdemGiro === "valor";
+  const lista = ag.slice().sort((a, b) => (porValor ? b.valor - a.valor : b.qtd - a.qtd)).slice(0, REL_TOPO);
+  const max = Math.max.apply(null, lista.map((a) => (porValor ? a.valor : a.qtd)));
+  const corpo = lista.map((a, i) => relBarra(
+    `<span class="rel-pos">${i + 1}º</span> ${escaparHtml(a.nome)}`,
+    porValor ? brl(a.valor) : `${a.qtd} un.`,
+    porValor ? a.valor : a.qtd, max,
+    porValor ? `${a.qtd} garrafa${a.qtd === 1 ? "" : "s"} · ${escaparHtml(brl(a.precoMedio))} por garrafa`
+             : `Faturou ${escaparHtml(brl(a.valor))}${a.margemUn != null ? ` · margem ${escaparHtml(brl(a.margemUn))}/un` : ""}`)).join("");
+  const chips = relChips("giro", [{ v: "qtd", rot: "Por garrafas" }, { v: "valor", rot: "Por faturamento" }], relOrdemGiro);
+  return relSecao("🔥 Maior saída", corpo, chips, `Os ${lista.length} rótulos que mais ${porValor ? "faturaram" : "giraram"} no período.`);
+}
+
+function relMargem(ag) {
+  const comCusto = ag.filter((a) => a.temCusto);
+  if (!comCusto.length) {
+    return `<section class="rel-secao">
+      <div class="rel-secao-topo"><h3>💰 Maior margem</h3></div>
+      <p class="dica rel-dica">Nenhum rótulo vendido no período tem <b>preço de aquisição</b> cadastrado — sem o custo não há como calcular a margem. Cadastre o custo de cada vinho no Estoque.</p>
+    </section>`;
+  }
+  const campo = relOrdemMargem === "unidade" ? "margemUn" : relOrdemMargem === "percentual" ? "margemPct" : "lucro";
+  const lista = comCusto.slice().sort((a, b) => b[campo] - a[campo]).slice(0, REL_TOPO);
+  // A barra mede o valor absoluto (prejuízo também tem tamanho); o sinal vem escrito e colorido.
+  const max = Math.max.apply(null, lista.map((a) => Math.abs(a[campo])));
+  const texto = (a) => campo === "margemPct" ? relPct(a.margemPct) : brl(a[campo]);
+  const corpo = lista.map((a, i) => relBarra(
+    `<span class="rel-pos">${i + 1}º</span> ${escaparHtml(a.nome)}`,
+    texto(a), Math.abs(a[campo]), max,
+    `${a.qtd} un. · vendido a ${escaparHtml(brl(a.precoMedio))} · custou ${escaparHtml(brl(a.custo))}` +
+    (campo === "lucro" ? ` · margem ${escaparHtml(relPct(a.margemPct))}` : ` · lucro ${escaparHtml(brl(a.lucro))}`),
+    a[campo] >= 0 ? "lucro" : "prejuizo")).join("");
+  const chips = relChips("margem", [
+    { v: "lucro", rot: "Lucro total" }, { v: "unidade", rot: "Por garrafa" }, { v: "percentual", rot: "Margem %" },
+  ], relOrdemMargem);
+  const dicas = {
+    lucro: "Quanto cada rótulo deixou de lucro no período (margem × garrafas vendidas).",
+    unidade: "Quanto sobra em cada garrafa vendida (preço vendido − custo).",
+    percentual: "Quanto de cada real vendido sobrou, antes das despesas.",
+  };
+  return relSecao("💰 Maior margem", corpo, chips, dicas[relOrdemMargem]);
+}
+
+function relPorPeriodo(vendas) {
+  const mapa = {};
+  vendas.forEach((v) => {
+    const k = (v.periodoInicio || "") + "||" + (v.periodoFim || "");
+    const p = mapa[k] || (mapa[k] = { inicio: v.periodoInicio, fim: v.periodoFim, qtd: 0, valor: 0 });
+    p.qtd += Number(v.qtd) || 0; p.valor += Number(v.valorVendido) || 0;
+  });
+  const lista = Object.values(mapa).sort((a, b) => String(a.inicio).localeCompare(String(b.inicio)));
+  if (lista.length < 2) return ""; // um período só: o número do topo já diz tudo
+  const max = Math.max.apply(null, lista.map((p) => p.valor));
+  const corpo = lista.map((p) => relBarra(
+    escaparHtml(dataBR(p.inicio) + " a " + dataBR(p.fim)), brl(p.valor), p.valor, max,
+    `${p.qtd} garrafa${p.qtd === 1 ? "" : "s"}`)).join("");
+  return relSecao("Faturamento por período importado", corpo, "", "Cada barra é um relatório de vendas que você importou, em ordem de data.");
+}
+
+function relPorAdega(vendas, pdvSel) {
+  if (pdvSel !== "__todas__") return "";
+  const mapa = {};
+  vendas.forEach((v) => {
+    const k = v.pdv || "(sem adega)";
+    const p = mapa[k] || (mapa[k] = { pdv: k, qtd: 0, valor: 0 });
+    p.qtd += Number(v.qtd) || 0; p.valor += Number(v.valorVendido) || 0;
+  });
+  const lista = Object.values(mapa).sort((a, b) => b.valor - a.valor);
+  if (lista.length < 2) return ""; // só faz sentido comparando adegas
+  const max = Math.max.apply(null, lista.map((p) => p.valor));
+  const corpo = lista.map((p) => relBarra(escaparHtml(p.pdv), brl(p.valor), p.valor, max,
+    `${p.qtd} garrafa${p.qtd === 1 ? "" : "s"}`)).join("");
+  return relSecao("Faturamento por adega", corpo, "", "Comparação entre as adegas no mesmo período.");
+}
+
+// Vinhos que estão na adega e NÃO venderam nada no período (dinheiro parado).
+function relParados(ag, pdvSel) {
+  const vendidos = new Set(ag.map((a) => a.sku).filter(Boolean));
+  const mapa = {};
+  DADOS.pdvEstoque.forEach((r) => {
+    if (pdvSel !== "__todas__" && r.pdv !== pdvSel) return;
+    const q = Number(r.qtd) || 0;
+    if (q <= 0 || vendidos.has(r.sku)) return;
+    const p = mapa[r.sku] || (mapa[r.sku] = { sku: r.sku, qtd: 0, adegas: [] });
+    p.qtd += q;
+    if (p.adegas.indexOf(r.pdv) < 0) p.adegas.push(r.pdv);
+  });
+  const lista = Object.values(mapa).map((p) => {
+    const it = DADOS.estoque.find((x) => x.sku === p.sku);
+    const custo = it ? Number(it.precoAquisicao) || 0 : 0;
+    return Object.assign(p, { nome: (it && it.nome) || p.sku, custo, preso: custo * p.qtd });
+  }).sort((a, b) => (b.preso - a.preso) || (b.qtd - a.qtd)).slice(0, REL_TOPO);
+  if (!lista.length) return "";
+  const max = Math.max.apply(null, lista.map((p) => p.qtd));
+  const corpo = lista.map((p) => relBarra(escaparHtml(p.nome), `${p.qtd} na adega`, p.qtd, max,
+    (p.preso > 0 ? `${escaparHtml(brl(p.preso))} parados` : "sem custo cadastrado") +
+    (p.adegas.length > 1 ? ` · ${escaparHtml(p.adegas.join(", "))}` : ""))).join("");
+  return relSecao("🐌 Parados no período", corpo,
+    "", "Estão na adega mas <b>não venderam nenhuma garrafa</b> no período — candidatos a promoção ou a sair do mix.");
+}
+
+function renderRelatorios() {
+  // Seletor de adega (Todas + ativas), preservando a escolha.
+  const selP = $("#rel-pdv");
+  if (selP) {
+    const prev = selP.value;
+    selP.innerHTML = `<option value="__todas__">Todas as adegas</option>` +
+      pdvsAtivos().map((p) => `<option value="${escaparAttr(p.nome)}">${escaparHtml(p.nome)}</option>`).join("");
+    selP.value = (prev && [...selP.options].some((o) => o.value === prev)) ? prev : "__todas__";
+  }
+  // Datas padrão na 1ª vez: abrange todas as vendas (ou últimos 30 dias).
+  const vTodas = DADOS.vendas || [];
+  if ($("#rel-de") && !$("#rel-de").value) {
+    const ini = vTodas.map((v) => v.periodoInicio).filter(Boolean).sort();
+    $("#rel-de").value = ini[0] || isoMenosDias(30);
+  }
+  if ($("#rel-ate") && !$("#rel-ate").value) {
+    const fim = vTodas.map((v) => v.periodoFim).filter(Boolean).sort();
+    $("#rel-ate").value = fim[fim.length - 1] || hojeISO();
+  }
+  const { de, ate, pdv } = relRange();
+  const vendas = vendasNoRange(de, ate, pdv);
+  const cont = $("#rel-conteudo");
+  const vazio = $("#vazio-relatorios");
+  if (vazio) vazio.classList.toggle("hidden", vendas.length > 0);
+  if (!vendas.length) { cont.innerHTML = ""; return; }
+  const ag = relAgregarPorSku(vendas);
+  cont.innerHTML = [
+    relResumo(ag), relPorTipo(ag), relGiro(ag), relMargem(ag),
+    relPorPeriodo(vendas), relPorAdega(vendas, pdv), relParados(ag, pdv),
+  ].filter(Boolean).join("");
+}
+["#rel-pdv", "#rel-de", "#rel-ate"].forEach((s) => { const el0 = $(s); if (el0) el0.addEventListener("change", renderRelatorios); });
+// Chips de ordenação (delegado: o conteúdo é recriado a cada render).
+{
+  const cont = $("#rel-conteudo");
+  if (cont) cont.addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-rel-grupo]");
+    if (!b) return;
+    if (b.dataset.relGrupo === "giro") relOrdemGiro = b.dataset.relValor;
+    else if (b.dataset.relGrupo === "margem") relOrdemMargem = b.dataset.relValor;
+    renderRelatorios();
+  });
+}
+
 // --- Modal: registrar despesa ---
 function abrirModalDespesa() {
   const f = $("#form-despesa"); f.reset();
@@ -2211,6 +2476,7 @@ function irPara(aba) {
   else if (aba === "compras") renderCompras();
   else if (aba === "ofertas") renderOfertas();
   else if (aba === "giro") renderGiro();
+  else if (aba === "relatorios") renderRelatorios();
   else if (aba === "guia") renderGuia();
   window.scrollTo(0, 0);
 }
@@ -2281,6 +2547,7 @@ function renderAtual() {
   if (aba === "compras") renderCompras();
   else if (aba === "ofertas") renderOfertas();
   else if (aba === "giro") renderGiro();
+  else if (aba === "relatorios") renderRelatorios();
   else if (aba === "guia") renderGuia();
   else renderEstoque();
   atualizarDatalists();

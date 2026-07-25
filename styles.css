@@ -283,22 +283,28 @@ body {
    ========================================================================== */
 .nav-inferior {
   position: fixed; bottom: 0; left: 0; right: 0; z-index: 30;
-  display: flex; align-items: center; justify-content: space-around;
+  display: flex; align-items: center; justify-content: space-between;
   background: rgba(42, 7, 21, 0.96);
   backdrop-filter: blur(10px);
   border-top: 1px solid var(--card-borda);
-  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
 }
+/* 6 abas + o botão "+" precisam caber em tela de celular estreita. */
 .nav-btn {
   background: none; border: none; color: var(--texto-suave); cursor: pointer;
-  display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; padding: 4px 9px;
+  display: flex; flex-direction: column; align-items: center; gap: 1px; font-size: 10px; padding: 4px 5px;
+  white-space: nowrap;
 }
 .nav-btn.ativo { color: var(--dourado-claro); }
-.nav-ico { font-size: 20px; }
+.nav-ico { font-size: 19px; }
 .nav-fab {
-  background: var(--dourado); color: var(--bordo-escuro); font-size: 30px; font-weight: 700;
-  width: 54px; height: 54px; border-radius: 50%; margin-top: -22px; box-shadow: var(--sombra);
-  padding: 0; line-height: 1;
+  background: var(--dourado); color: var(--bordo-escuro); font-size: 28px; font-weight: 700;
+  width: 50px; height: 50px; border-radius: 50%; margin-top: -20px; box-shadow: var(--sombra);
+  padding: 0; line-height: 1; flex: 0 0 auto;
+}
+@media (max-width: 344px) {
+  .nav-btn { font-size: 9px; padding: 4px 3px; }
+  .nav-ico { font-size: 17px; }
 }
 
 /* ==========================================================================
@@ -544,6 +550,12 @@ body {
 /* Aba Financeiro (DRE + despesas) */
 .fin-controles { display: flex; gap: 10px; flex-wrap: wrap; max-width: 640px; margin: 0 auto; padding: 12px 18px 0; }
 .fin-campo { display: flex; flex-direction: column; font-size: 12px; color: var(--texto-suave); gap: 3px; flex: 1 1 30%; min-width: 96px; }
+.fin-campo select, .fin-campo input { min-width: 0; }
+/* Em celular estreito o nome da adega não cabe ao lado das duas datas:
+   o seletor ganha a linha de cima e as datas dividem a de baixo. */
+@media (max-width: 420px) {
+  .fin-campo:first-child { flex: 1 1 100%; }
+}
 .dre { max-width: 640px; margin: 12px auto 0; padding: 0 18px; }
 .dre-linha { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--card-borda); }
 .dre-linha span { color: var(--texto-suave); font-size: 14px; }
@@ -611,3 +623,43 @@ body {
 .cam-acoes { display: flex; gap: 10px; margin-top: 12px; }
 .cam-acoes button { flex: 1; padding: 14px; font-size: 16px; }
 #btn-cam-capturar { flex: 2; }
+
+/* ==========================================================================
+   ABA RELATÓRIOS — análises de vendas
+   Gráficos sem biblioteca: barras horizontais em CSS. Marcas FINAS, sem
+   grade e sem eixo (o valor vem escrito ao lado do rótulo). A cor da barra
+   é sempre a mesma — o comprimento é que carrega o dado; verde/vermelho
+   só aparecem quando significam lucro/prejuízo.
+   ========================================================================== */
+.rel-secao { max-width: 640px; margin: 18px auto 0; padding: 0 18px; }
+.rel-secao-topo { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.rel-secao-topo h3 { font-size: 15px; color: var(--dourado-claro); font-weight: 700; }
+.rel-dica { margin: 0 0 10px; font-size: 12px; }
+.rel-chips { padding: 0; margin: 0; gap: 6px; flex-wrap: wrap; }
+.rel-chips .chip { font-size: 12px; padding: 5px 10px; }
+
+/* Número de destaque do período (um por tela) */
+.rel-hero { background: var(--card); border: 1px solid var(--dourado); border-radius: 14px; padding: 14px 16px; text-align: center; }
+.rel-hero-rot { display: block; font-size: 12px; color: var(--texto-suave); letter-spacing: .02em; }
+.rel-hero-num { display: block; font-size: clamp(30px, 8.5vw, 42px); font-weight: 800; color: var(--dourado-claro); line-height: 1.15; margin-top: 2px; }
+
+/* Indicadores do período */
+.rel-kpis { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 10px; }
+.rel-kpi { background: var(--card); border: 1px solid var(--card-borda); border-radius: 12px; padding: 10px 12px; }
+.rel-kpi-rot { display: block; font-size: 11px; color: var(--texto-suave); }
+.rel-kpi-num { display: block; font-size: 19px; font-weight: 700; color: var(--texto); line-height: 1.3; }
+.rel-kpi-num.lucro { color: var(--verde); }
+.rel-kpi-num.prejuizo { color: var(--vermelho); }
+
+/* Uma barra = uma linha: rótulo + valor escrito + trilha + detalhe */
+.rel-barra { padding: 9px 0; border-bottom: 1px solid var(--card-borda); }
+.rel-barra:last-child { border-bottom: none; }
+.rel-barra-topo { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.rel-barra-rot { font-size: 14px; color: var(--texto); min-width: 0; overflow-wrap: anywhere; }
+.rel-barra-val { font-size: 14px; font-weight: 700; color: var(--texto); white-space: nowrap; flex: 0 0 auto; }
+.rel-barra-val.lucro { color: var(--verde); }
+.rel-barra-val.prejuizo { color: var(--vermelho); }
+.rel-barra-trilha { height: 10px; margin-top: 6px; border-radius: 3px; background: rgba(255, 255, 255, .07); overflow: hidden; }
+.rel-barra-fill { display: block; height: 100%; min-width: 3px; background: var(--dourado); border-radius: 0 4px 4px 0; }
+.rel-barra-extra { margin-top: 5px; font-size: 12px; color: var(--texto-suave); }
+.rel-pos { display: inline-block; min-width: 22px; font-size: 12px; font-weight: 700; color: var(--texto-suave); }

@@ -121,6 +121,19 @@
     </div>
   </section>
 
+  <!-- ====================== ABA: RELATÓRIOS (análises de vendas) ====================== -->
+  <section id="aba-relatorios" class="aba hidden">
+    <div class="fin-controles">
+      <label class="fin-campo">Adega <select id="rel-pdv"></select></label>
+      <label class="fin-campo">De <input id="rel-de" type="date" /></label>
+      <label class="fin-campo">Até <input id="rel-ate" type="date" /></label>
+    </div>
+    <div id="rel-conteudo"></div>
+    <div id="vazio-relatorios" class="vazio hidden">
+      <p>Sem vendas neste período.<br />Importe o relatório de vendas do sistema da adega na aba <b>Financeiro</b> (📊 Importar), ou ajuste as datas acima.</p>
+    </div>
+  </section>
+
   <!-- ====================== NAVEGAÇÃO INFERIOR ====================== -->
   <nav class="nav-inferior">
     <button class="nav-btn ativo" data-aba="estoque">
@@ -134,6 +147,9 @@
     </button>
     <button class="nav-btn" data-aba="giro">
       <span class="nav-ico">📊</span><span>Financeiro</span>
+    </button>
+    <button class="nav-btn" data-aba="relatorios">
+      <span class="nav-ico">📈</span><span>Relatórios</span>
     </button>
     <button class="nav-btn" data-aba="guia">
       <span class="nav-ico">📖</span><span>Guia</span>
