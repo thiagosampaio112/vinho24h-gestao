@@ -156,11 +156,8 @@
           <label>Produtor <input name="produtor" placeholder="Opcional" /></label>
           <label>Código/SKU interno <input name="sku" placeholder="Opcional" /></label>
         </div>
-        <div class="form-linha">
-          <label>Código do sistema <input name="codigo" placeholder="Ex.: 01022 (opcional)" /></label>
-          <label>Preço de venda padrão (R$) <input name="precoVenda" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00" /></label>
-        </div>
-        <p class="dica">O preço por adega fica em <b>💲 Preços</b> (na tela do estoque). Este é só o padrão, usado quando a adega não tem preço próprio.</p>
+        <label>Código do sistema <input name="codigo" placeholder="Ex.: 01022 (opcional)" /></label>
+        <p class="dica">O preço de venda fica em <b>💲 Preços</b> (na tela do estoque): um preço padrão por adega, com exceções por vinho.</p>
         <div class="form-linha">
           <label>Retaguarda (un.) <input name="qtd" type="number" min="0" step="1" value="0" inputmode="numeric" /></label>
           <label>Alerta abaixo de <input name="minimo" type="number" min="0" step="1" value="3" inputmode="numeric" /></label>
@@ -459,7 +456,10 @@
       </div>
       <div class="form">
         <label>Adega <select id="precos-pdv"></select></label>
-        <p class="dica">Defina o preço de venda de cada vinho <b>nesta adega</b>. Em branco = usa o preço padrão do rótulo. Salva sozinho.</p>
+        <div class="preco-padrao-linha">
+          <label>Preço padrão desta adega (R$) <input id="preco-padrao-adega" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00" /></label>
+        </div>
+        <p class="dica">O <b>preço padrão</b> vale para <b>todos os vinhos desta adega</b>. Abaixo, digite um preço só nos vinhos que forem <b>exceção</b> — em branco, o vinho usa o padrão.</p>
         <div id="precos-lista" class="precos-lista"></div>
       </div>
     </div>

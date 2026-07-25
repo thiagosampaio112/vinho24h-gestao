@@ -38,7 +38,7 @@ var COL_COMPRAS = ["data","nome","qtd","precoUnit","fornecedor","notaChave"];
 var COL_FORNECEDORES = ["nome","contato","obs"];
 var COL_PRECOS = ["data","consulta","achado","preco","url","site"];
 var COL_LOJAS = ["nome","url","ativo"];
-var COL_PDVS = ["nome","ativo","obs"];
+var COL_PDVS = ["nome","ativo","obs","precoPadrao"];
 var COL_PDV_ESTOQUE = ["pdv","sku","qtd","minimo","nivelPar","precoVenda"];
 var COL_VENDAS = ["periodoInicio","periodoFim","importadoEm","pdv","sku","codigo","descricao","categoria","qtd","precoMedio","valorVendido"];
 
@@ -118,7 +118,7 @@ function doGet(e) {
       return r;
     });
     var lojas = _lerAba(ABA_LOJAS, COL_LOJAS);
-    var pdvs = _lerAba(ABA_PDVS, COL_PDVS);
+    var pdvs = _lerAba(ABA_PDVS, COL_PDVS).map(function (r) { r.precoPadrao = _num(r.precoPadrao); return r; });
     var pdvEstoque = _lerAba(ABA_PDV_ESTOQUE, COL_PDV_ESTOQUE).map(function (r) {
       r.qtd = _num(r.qtd); r.minimo = _num(r.minimo); r.nivelPar = _num(r.nivelPar); r.precoVenda = _num(r.precoVenda); return r;
     });
@@ -279,8 +279,19 @@ function salvarPdv(pdv, nomeOriginal) {
   var sh = _aba(ABA_PDVS, COL_PDVS);
   var alvo = String(nomeOriginal || nome).trim();
   var linha = _acharLinhaCol(sh, 1, alvo); // coluna 1 = nome
-  var ativo = (pdv.ativo == null || pdv.ativo === "") ? "sim" : String(pdv.ativo);
-  var obj = { nome: (linha > 0 ? alvo : nome), ativo: ativo, obs: pdv.obs || "" };
+  // MERGE: parte da linha existente e só sobrescreve os campos enviados
+  // (assim arquivar/reativar não apaga obs nem o preço padrão da adega).
+  var obj;
+  if (linha > 0) {
+    var atual = sh.getRange(linha, 1, 1, COL_PDVS.length).getValues()[0];
+    obj = {}; for (var i = 0; i < COL_PDVS.length; i++) obj[COL_PDVS[i]] = atual[i];
+    obj.nome = alvo;
+  } else {
+    obj = { nome: nome, ativo: "sim", obs: "", precoPadrao: 0 };
+  }
+  if (pdv.ativo != null && pdv.ativo !== "") obj.ativo = String(pdv.ativo);
+  if (pdv.obs != null) obj.obs = pdv.obs;
+  if (pdv.precoPadrao != null && pdv.precoPadrao !== "") obj.precoPadrao = _num(pdv.precoPadrao);
   var arr = _objParaLinha(obj, COL_PDVS);
   if (linha > 0) sh.getRange(linha, 1, 1, COL_PDVS.length).setValues([arr]);
   else sh.appendRow(arr);

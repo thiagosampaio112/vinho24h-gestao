@@ -137,6 +137,7 @@ function normalizarDados() {
   if (!pdvAtual || !ativas.some((p) => p.nome === pdvAtual)) pdvAtual = (ativas[0] || DADOS.pdvs[0]).nome;
   // Normaliza números das linhas de PDV.
   DADOS.pdvEstoque.forEach((r) => { r.qtd = Number(r.qtd) || 0; r.minimo = Number(r.minimo) || 0; r.nivelPar = Number(r.nivelPar) || 0; r.precoVenda = Number(r.precoVenda) || 0; });
+  DADOS.pdvs.forEach((p) => { p.precoPadrao = Number(p.precoPadrao) || 0; });
 }
 
 // --- Ajudantes de PDV (ponto de venda / adega) ---
@@ -155,14 +156,18 @@ function garantirLinhaPdv(sku, pdv) {
   if (!r) { r = { pdv, sku, qtd: 0, minimo: 0, nivelPar: 0, precoVenda: 0 }; DADOS.pdvEstoque.push(r); }
   return r;
 }
-// Preço de venda efetivo de um rótulo NA adega: o preço da adega se houver,
-// senão o "preço padrão" do rótulo (fallback).
+// Preço padrão de uma adega (vale para todos os vinhos dela, salvo exceções).
+function precoPadraoAdega(pdv) {
+  const p = (DADOS.pdvs || []).find((x) => x.nome === pdv);
+  return p ? (Number(p.precoPadrao) || 0) : 0;
+}
+// Preço de venda efetivo de um rótulo NA adega: o preço específico do vinho
+// (exceção) se houver; senão o PREÇO PADRÃO DA ADEGA.
 function precoVendaNoPdv(sku, pdv) {
   const r = linhaPdv(sku, pdv);
   const pv = r ? (Number(r.precoVenda) || 0) : 0;
   if (pv > 0) return pv;
-  const it = DADOS.estoque.find((x) => x.sku === sku);
-  return it ? (Number(it.precoVenda) || 0) : 0;
+  return precoPadraoAdega(pdv);
 }
 
 // Gera um SKU simples quando o item não tem um.
@@ -312,11 +317,18 @@ async function ajustarPdv(sku, pdv, delta) {
   garantirLinhaPdv(sku, pdv).qtd = nova; gravarLocal();
   if (online()) sincronizarFundo("ajustarPdv", { sku, pdv, qtd: nova });
 }
-// Preço de venda de um rótulo NESTA adega (por PDV).
+// Preço de venda de um rótulo NESTA adega (exceção para um vinho específico).
 async function ajustarPrecoPdv(sku, pdv, preco) {
   preco = Math.max(0, Number(preco) || 0);
   garantirLinhaPdv(sku, pdv).precoVenda = preco; gravarLocal();
   if (online()) sincronizarFundo("ajustarPrecoPdv", { sku, pdv, preco });
+}
+// Preço PADRÃO de uma adega (vale para todos os vinhos dela, salvo exceções).
+async function setPrecoPadraoAdega(pdv, preco) {
+  preco = Math.max(0, Number(preco) || 0);
+  const p = DADOS.pdvs.find((x) => x.nome === pdv); if (!p) return;
+  p.precoPadrao = preco; gravarLocal();
+  if (online()) sincronizarFundo("salvarPdv", { pdv: { nome: pdv, precoPadrao: preco }, nomeOriginal: pdv });
 }
 // Ajuste direto da retaguarda (+/−).
 async function ajustarQtd(sku, delta) {
@@ -517,17 +529,21 @@ function abrirModalPrecos() {
 }
 function renderPrecosLista(pdv) {
   const cont = $("#precos-lista"); if (!cont) return;
+  // Campo do preço padrão da adega.
+  const inpPadrao = $("#preco-padrao-adega");
+  const padraoAdega = precoPadraoAdega(pdv);
+  if (inpPadrao) inpPadrao.value = padraoAdega > 0 ? padraoAdega : "";
   cont.innerHTML = "";
   const lista = (DADOS.estoque || []).slice().sort((a, b) => String(a.nome).localeCompare(String(b.nome)));
   if (!lista.length) { cont.innerHTML = `<p class="dica">Cadastre vinhos no estoque primeiro.</p>`; return; }
+  const dicaPadrao = padraoAdega > 0 ? String(padraoAdega).replace(".", ",") : "sem preço";
   lista.forEach((v) => {
     const lp = linhaPdv(v.sku, pdv);
     const override = (lp && lp.precoVenda > 0) ? lp.precoVenda : "";
-    const padrao = Number(v.precoVenda) || 0;
     const row = el("div", "preco-row");
     row.innerHTML = `
       <span class="preco-nome">${escaparHtml(v.nome || "(sem nome)")}</span>
-      <div class="preco-campo">R$ <input type="number" min="0" step="0.01" inputmode="decimal" value="${override}" placeholder="${padrao ? String(padrao).replace(".", ",") : "padrão"}" /></div>`;
+      <div class="preco-campo">R$ <input type="number" min="0" step="0.01" inputmode="decimal" value="${override}" placeholder="${dicaPadrao}" /></div>`;
     const inp = row.querySelector("input");
     inp.addEventListener("change", () => { ajustarPrecoPdv(v.sku, pdv, Number(inp.value) || 0); });
     cont.appendChild(row);
@@ -535,6 +551,12 @@ function renderPrecosLista(pdv) {
 }
 $("#btn-precos-adega").addEventListener("click", abrirModalPrecos);
 $("#precos-pdv").addEventListener("change", (e) => renderPrecosLista(e.target.value));
+// Preço padrão da adega: aplica a todos os vinhos (menos exceções) e atualiza os placeholders.
+$("#preco-padrao-adega").addEventListener("change", async (e) => {
+  const pdv = $("#precos-pdv").value || pdvAtual;
+  await setPrecoPadraoAdega(pdv, Number(e.target.value) || 0);
+  renderPrecosLista(pdv);
+});
 
 function classeTipo(t) { return { Tinto: "tag-tinto", Branco: "tag-branco", "Rosé": "tag-rose", Espumante: "tag-espumante" }[t] || "tag-tinto"; }
 

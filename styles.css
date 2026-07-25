@@ -536,6 +536,8 @@ body {
 .guia-reativar { flex: 0 0 auto; padding: 8px 12px; font-size: 13px; white-space: nowrap; }
 
 /* Tela: Preços por adega */
+.preco-padrao-linha { margin-top: 10px; background: var(--bordo); border: 1px solid var(--dourado); border-radius: 10px; padding: 10px 12px; }
+.preco-padrao-linha label { font-weight: 700; color: var(--dourado-claro); }
 .precos-lista { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 .preco-row { display: flex; align-items: center; gap: 12px; background: var(--card); border: 1px solid var(--card-borda); border-radius: 10px; padding: 8px 12px; }
 .preco-nome { flex: 1 1 auto; min-width: 0; font-weight: 600; color: var(--dourado-claro); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
