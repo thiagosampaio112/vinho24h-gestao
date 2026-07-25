@@ -238,7 +238,15 @@ async function excluirDespesa(despesa) {
   const linha = despesa.__row;
   const i = DADOS.despesas.indexOf(despesa); if (i >= 0) DADOS.despesas.splice(i, 1);
   gravarLocal();
-  if (online() && linha) sincronizarFundo("excluirDespesa", { linha });
+  // Manda os DOIS: o objeto (o backend novo casa por conteúdo, então funciona
+  // até para despesa criada nesta sessão, que ainda não tem número de linha) e
+  // a linha, para o backend ainda não reimplantado continuar funcionando como
+  // funcionava. Sem isso, lançar e apagar uma despesa antes de recarregar
+  // deixava a linha órfã na planilha.
+  if (online()) sincronizarFundo("excluirDespesa", {
+    despesa: { data: despesa.data, pdv: despesa.pdv, categoria: despesa.categoria, descricao: despesa.descricao, valor: despesa.valor },
+    linha,
+  });
 }
 
 // --- Baixa de estoque sem venda (degustação, quebra, vencido, brinde…) ---

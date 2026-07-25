@@ -182,7 +182,7 @@ function doPost(e) {
       case "importarPlanograma": r = importarPlanograma(body.pdv, body.itens); break;
       case "importarVendas":   r = importarVendas(body.periodoInicio, body.periodoFim, body.pdv, body.itens); break;
       case "registrarDespesa": r = registrarDespesa(body.despesa); break;
-      case "excluirDespesa":   r = excluirDespesa(body.linha); break;
+      case "excluirDespesa":   r = excluirDespesa(body.despesa || body.linha); break;
       case "excluirVenda":     r = excluirVenda(body.venda); break;
       case "registrarVendaManual": r = registrarVendaManual(body.venda); break;
       case "registrarBaixa":   r = registrarBaixa(body.baixa); break;
@@ -271,12 +271,30 @@ function registrarDespesa(despesa) {
   sh.appendRow(_objParaLinha(despesa || {}, COL_DESPESAS));
   return { ok: true };
 }
-function excluirDespesa(linha) {
-  linha = parseInt(linha, 10);
-  if (!linha || linha < 2) throw new Error("Despesa inválida.");
+// Aceita as DUAS formas: o objeto da despesa (casa por CONTEÚDO — funciona
+// para despesa criada nesta mesma sessão, que ainda não tem número de linha)
+// ou o número da linha (como era antes).
+function excluirDespesa(arg) {
   var sh = _aba(ABA_DESPESAS, COL_DESPESAS);
+  if (arg && typeof arg === "object") {
+    var todas = _lerAba(ABA_DESPESAS, COL_DESPESAS);
+    var removida = null, manter = [];
+    for (var i = 0; i < todas.length; i++) {
+      if (!removida && _mesmaDespesa(todas[i], arg)) { removida = todas[i]; continue; }
+      manter.push(todas[i]);
+    }
+    if (removida) _regravaAba(sh, COL_DESPESAS, manter);
+    return { ok: true, removidas: removida ? 1 : 0 };
+  }
+  var linha = parseInt(arg, 10);
+  if (!linha || linha < 2) throw new Error("Despesa inválida.");
   if (linha <= sh.getLastRow()) sh.deleteRow(linha);
   return { ok: true };
+}
+function _mesmaDespesa(a, b) {
+  return _fmtData(a.data) === _fmtData(b.data) && String(a.pdv) === String(b.pdv) &&
+    String(a.categoria) === String(b.categoria) && String(a.descricao) === String(b.descricao) &&
+    _num(a.valor) === _num(b.valor);
 }
 
 // BAIXA DE ESTOQUE SEM VENDA (degustação, quebra, vencido, brinde, consumo).
