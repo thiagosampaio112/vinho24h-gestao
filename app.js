@@ -133,6 +133,8 @@ function normalizarDados() {
   DADOS.guia = DADOS.guia || []; // vinhos do guia do QR (editados por aqui, lidos pela planilha do guia)
   DADOS.despesas = DADOS.despesas || []; // despesas por adega (Fase 5)
   DADOS.despesas.forEach((d) => { d.valor = Number(d.valor) || 0; });
+  DADOS.baixas = DADOS.baixas || []; // garrafas que saíram sem venda (degustação, quebra…)
+  DADOS.baixas.forEach((b) => { b.qtd = Number(b.qtd) || 0; b.custoUnit = Number(b.custoUnit) || 0; b.valor = Number(b.valor) || 0; });
   // Sempre há ao menos uma adega. A 1ª ativa é a "adega atual" da tela.
   if (!DADOS.pdvs.length) DADOS.pdvs = [{ nome: "Ecopark", ativo: "sim" }];
   const ativas = pdvsAtivos();
@@ -237,6 +239,44 @@ async function excluirDespesa(despesa) {
   const i = DADOS.despesas.indexOf(despesa); if (i >= 0) DADOS.despesas.splice(i, 1);
   gravarLocal();
   if (online() && linha) sincronizarFundo("excluirDespesa", { linha });
+}
+
+// --- Baixa de estoque sem venda (degustação, quebra, vencido, brinde…) ---
+// Motivos oferecidos. Degustação é o caso que motivou o recurso, mas o mesmo
+// registro serve para toda garrafa que sai sem ser vendida.
+const MOTIVOS_BAIXA = ["Degustação / prova", "Quebra / avaria", "Vencido / estragado", "Brinde / cortesia", "Consumo próprio", "Outro"];
+async function registrarBaixa(b) {
+  const it = DADOS.estoque.find((x) => x.sku === b.sku);
+  // Grava o custo do momento: se o preço de aquisição mudar depois, a perda
+  // já registrada não muda de valor.
+  const custoUnit = it ? Number(it.precoAquisicao) || 0 : 0;
+  const baixa = { data: b.data, pdv: b.pdv, sku: b.sku, qtd: b.qtd, motivo: b.motivo,
+    descricao: b.descricao || "", custoUnit, valor: custoUnit * b.qtd, origem: b.origem };
+  DADOS.baixas.unshift(baixa);
+  if (b.origem === "retaguarda") {
+    if (it) it.qtd = Math.max(0, (Number(it.qtd) || 0) - b.qtd);
+  } else {
+    const linha = garantirLinhaPdv(b.sku, b.pdv);
+    linha.qtd = Math.max(0, linha.qtd - b.qtd);
+  }
+  gravarLocal();
+  if (online()) sincronizarFundo("registrarBaixa", { baixa });
+}
+async function excluirBaixa(baixa) {
+  const i = DADOS.baixas.indexOf(baixa); if (i >= 0) DADOS.baixas.splice(i, 1);
+  // Devolve a garrafa de onde ela saiu.
+  if (baixa.sku) {
+    if (baixa.origem === "retaguarda") {
+      const it = DADOS.estoque.find((x) => x.sku === baixa.sku);
+      if (it) it.qtd = (Number(it.qtd) || 0) + (Number(baixa.qtd) || 0);
+    } else {
+      garantirLinhaPdv(baixa.sku, baixa.pdv).qtd += Number(baixa.qtd) || 0;
+    }
+  }
+  gravarLocal();
+  // Manda a baixa inteira: o backend casa pelo conteúdo, então funciona mesmo
+  // para uma baixa criada nesta sessão (que ainda não tem número de linha).
+  if (online()) sincronizarFundo("excluirBaixa", { baixa });
 }
 
 // --- Lojas de confiança (radar de preço, Fase 3B) ---
@@ -1650,6 +1690,12 @@ function despesasNoRange(de, ate, pdv) {
     return (!de || String(d.data) >= de) && (!ate || String(d.data) <= ate);
   });
 }
+function baixasNoRange(de, ate, pdv) {
+  return (DADOS.baixas || []).filter((b) => {
+    if (pdv !== "__todas__" && b.pdv !== pdv) return false;
+    return (!de || String(b.data) >= de) && (!ate || String(b.data) <= ate);
+  });
+}
 function renderGiro() {
   // Seletor de adega (Todas + ativas), preservando a escolha.
   const selP = $("#fin-pdv");
@@ -1683,13 +1729,17 @@ function renderGiro() {
   });
   const lucroBruto = faturamento - cmv;
   const totDesp = desp.reduce((s, d) => s + (Number(d.valor) || 0), 0);
-  const lucroLiquido = lucroBruto - totDesp;
+  // Garrafa que saiu sem venda é custo real: sem esta linha o lucro fica inflado.
+  const baixas = baixasNoRange(de, ate, pdv);
+  const totBaixas = baixas.reduce((s, b) => s + (Number(b.valor) || 0), 0);
+  const lucroLiquido = lucroBruto - totDesp - totBaixas;
   const linhaDre = (rot, val, cls) => `<div class="dre-linha ${cls || ""}"><span>${rot}</span><b>${brl(val)}</b></div>`;
   $("#fin-dre").innerHTML =
     linhaDre("Faturamento", faturamento) +
     linhaDre("− Custo dos produtos", cmv) +
     linhaDre("= Lucro bruto", lucroBruto, "dre-sub") +
     linhaDre("− Despesas", totDesp) +
+    linhaDre("− Perdas e degustação", totBaixas) +
     `<div class="dre-linha dre-total ${lucroLiquido >= 0 ? "lucro" : "prejuizo"}"><span>= Lucro líquido</span><b>${brl(lucroLiquido)}</b></div>`;
 
   // Vendas avulsas do período (lançadas à mão, fora do sistema da adega).
@@ -1716,6 +1766,42 @@ function renderGiro() {
           await comProgresso(() => excluirVenda(v)); renderGiro(); toast("Venda avulsa excluída");
         });
         ca.appendChild(row);
+      });
+    }
+  }
+
+  // Baixas do período (garrafas que saíram sem venda), agrupadas por motivo.
+  const cb = $("#fin-baixas");
+  if (cb) {
+    cb.innerHTML = "";
+    if (!baixas.length) {
+      cb.innerHTML = `<p class="dica">Nenhuma baixa neste período. Use <b>＋ Baixa</b> para registrar garrafa de <b>degustação</b>, quebra, vencida ou brinde — o custo entra no lucro líquido.</p>`;
+    } else {
+      const porMotivo = {};
+      baixas.forEach((b) => { (porMotivo[b.motivo || "Outro"] = porMotivo[b.motivo || "Outro"] || []).push(b); });
+      Object.keys(porMotivo).sort((a, b) =>
+        porMotivo[b].reduce((s, x) => s + x.valor, 0) - porMotivo[a].reduce((s, x) => s + x.valor, 0)
+      ).forEach((motivo) => {
+        const lista = porMotivo[motivo];
+        const tot = lista.reduce((s, x) => s + (Number(x.valor) || 0), 0);
+        const un = lista.reduce((s, x) => s + (Number(x.qtd) || 0), 0);
+        cb.appendChild(el("div", "baixa-grupo", `<span>${escaparHtml(motivo)}</span><b>${un} un. · ${brl(tot)}</b>`));
+        lista.slice().sort((a, b) => String(b.data).localeCompare(String(a.data))).forEach((b) => {
+          const it = DADOS.estoque.find((x) => x.sku === b.sku);
+          const row = el("div", "despesa-row");
+          row.innerHTML = `
+            <div class="despesa-info">
+              <span class="despesa-cat">${escaparHtml((it && it.nome) || b.sku)}</span>
+              <span class="despesa-sub">${dataBR(b.data)} · ${escaparHtml(b.pdv)} · ${Number(b.qtd) || 0} un. · ${b.origem === "retaguarda" ? "da retaguarda" : "da adega"}${b.descricao ? " · " + escaparHtml(b.descricao) : ""}</span>
+            </div>
+            <span class="despesa-val">${brl(b.valor)}</span>
+            <button class="despesa-x" aria-label="Excluir baixa" title="Excluir baixa">✕</button>`;
+          row.querySelector(".despesa-x").addEventListener("click", async () => {
+            if (!confirm(`Excluir esta baixa de ${Number(b.qtd) || 0} un. (${brl(b.valor)})?\n\nAs garrafas voltam para ${b.origem === "retaguarda" ? "a retaguarda" : "a adega " + b.pdv}.`)) return;
+            await comProgresso(() => excluirBaixa(b)); renderGiro(); toast("Baixa excluída");
+          });
+          cb.appendChild(row);
+        });
       });
     }
   }
@@ -1752,7 +1838,7 @@ function renderGiro() {
   });
   const cont = $("#giro-lista");
   cont.innerHTML = "";
-  $("#vazio-giro").classList.toggle("hidden", vendas.length > 0 || desp.length > 0);
+  $("#vazio-giro").classList.toggle("hidden", vendas.length > 0 || desp.length > 0 || baixas.length > 0);
   Object.values(porSku).sort((a, b) => b.qtd - a.qtd).forEach((a) => {
     const it = DADOS.estoque.find((x) => x.sku === a.sku);
     const precoMedio = a.qtd ? a.valor / a.qtd : 0;
@@ -1998,6 +2084,40 @@ function relParados(ag, pdvSel) {
     "", "Estão na adega mas <b>não venderam nenhuma garrafa</b> no período — candidatos a promoção ou a sair do mix.");
 }
 
+// Perdas e baixas: quanto saiu sem vender, por motivo e por rótulo.
+// Fica SEPARADO do faturamento/giro de propósito — garrafa degustada não é
+// venda, e misturar as duas coisas estragaria a margem dos relatórios.
+function relPerdas(de, ate, pdv) {
+  const baixas = baixasNoRange(de, ate, pdv);
+  if (!baixas.length) return "";
+  const totV = baixas.reduce((s, b) => s + (Number(b.valor) || 0), 0);
+  const totQ = baixas.reduce((s, b) => s + (Number(b.qtd) || 0), 0);
+  const agrupar = (chave) => {
+    const m = {};
+    baixas.forEach((b) => {
+      const k = chave(b);
+      const g = m[k] || (m[k] = { k, qtd: 0, valor: 0 });
+      g.qtd += Number(b.qtd) || 0; g.valor += Number(b.valor) || 0;
+    });
+    return Object.values(m).sort((a, b) => b.valor - a.valor || b.qtd - a.qtd);
+  };
+  const porMotivo = agrupar((b) => b.motivo || "Outro");
+  const maxM = Math.max.apply(null, porMotivo.map((g) => g.valor));
+  let corpo = porMotivo.map((g) => relBarra(escaparHtml(g.k), brl(g.valor), g.valor, maxM,
+    `${g.qtd} garrafa${g.qtd === 1 ? "" : "s"}`)).join("");
+  // Por rótulo só quando há mais de um — senão repete a informação de cima.
+  const porSku = agrupar((b) => b.sku).slice(0, REL_TOPO);
+  if (porSku.length > 1) {
+    const maxS = Math.max.apply(null, porSku.map((g) => g.valor));
+    corpo += `<div class="rel-sub">Por rótulo</div>` + porSku.map((g) => {
+      const it = DADOS.estoque.find((x) => x.sku === g.k);
+      return relBarra(escaparHtml((it && it.nome) || g.k), brl(g.valor), g.valor, maxS,
+        `${g.qtd} garrafa${g.qtd === 1 ? "" : "s"}`);
+    }).join("");
+  }
+  return relSecao("🍷 Perdas e baixas (saiu sem vender)", corpo, "",
+    `<b>${totQ} garrafa${totQ === 1 ? "" : "s"}</b> · <b>${brl(totV)}</b> de custo no período. Não entra no faturamento nem na margem — aparece no lucro líquido como "Perdas e degustação".`);
+}
 function renderRelatorios() {
   // Seletor de adega (Todas + ativas), preservando a escolha.
   const selP = $("#rel-pdv");
@@ -2019,14 +2139,18 @@ function renderRelatorios() {
   }
   const { de, ate, pdv } = relRange();
   const vendas = vendasNoRange(de, ate, pdv);
+  const temBaixa = baixasNoRange(de, ate, pdv).length > 0;
   const cont = $("#rel-conteudo");
   const vazio = $("#vazio-relatorios");
-  if (vazio) vazio.classList.toggle("hidden", vendas.length > 0);
-  if (!vendas.length) { cont.innerHTML = ""; return; }
+  if (vazio) vazio.classList.toggle("hidden", vendas.length > 0 || temBaixa);
+  if (!vendas.length && !temBaixa) { cont.innerHTML = ""; return; }
+  // Sem venda no período mas com baixa, mostra só o bloco de perdas.
+  if (!vendas.length) { cont.innerHTML = relPerdas(de, ate, pdv); return; }
   const ag = relAgregarPorSku(vendas);
   cont.innerHTML = [
     relResumo(ag), relPorTipo(ag), relGiro(ag), relMargem(ag),
     relPorPeriodo(vendas), relPorAdega(vendas, pdv), relParados(ag, pdv),
+    relPerdas(de, ate, pdv),
   ].filter(Boolean).join("");
 }
 ["#rel-pdv", "#rel-de", "#rel-ate"].forEach((s) => { const el0 = $(s); if (el0) el0.addEventListener("change", renderRelatorios); });
@@ -2139,6 +2263,69 @@ $("#form-avulsa").addEventListener("submit", async (e) => {
   if (v.qtd > disp) { toast(`Só há ${disp} disponível — ajuste a quantidade`); return; }
   await comProgresso(() => registrarVendaAvulsa(v));
   fechar("#modal-avulsa"); renderGiro(); toast("Venda avulsa registrada ✓");
+});
+
+// --- Modal: baixa de estoque (garrafa que saiu sem venda) ----------------
+function atualizarBaixa() {
+  const f = $("#form-baixa"); if (!f) return;
+  const daRet = f.origem.value === "retaguarda";
+  const it = DADOS.estoque.find((x) => x.sku === f.sku.value);
+  const disp = daRet ? (it ? Number(it.qtd) || 0 : 0) : qtdNoPdv(f.sku.value, f.pdv.value);
+  const qtd = Number(f.qtd.value) || 0;
+  const custo = it ? Number(it.precoAquisicao) || 0 : 0;
+  const r = $("#baixa-resumo"); if (!r) return;
+  if (qtd > disp) {
+    r.innerHTML = `⚠ Só há <b>${disp}</b> ${daRet ? "na retaguarda" : "nesta adega"} — o estoque não pode ficar negativo.`;
+    r.className = "dica conf-aviso";
+  } else if (custo <= 0) {
+    r.innerHTML = `Sai de <b>${daRet ? "retaguarda" : f.pdv.value}</b> (${disp} → ${disp - qtd}). ⚠ Este vinho não tem <b>preço de aquisição</b> cadastrado, então a perda entra como R$ 0,00 no lucro líquido.`;
+    r.className = "dica";
+  } else {
+    r.innerHTML = `Custo da perda: <b>${brl(custo * qtd)}</b> (${qtd} × ${brl(custo)}) · sai de <b>${daRet ? "retaguarda" : f.pdv.value}</b> (${disp} → ${disp - qtd}).`;
+    r.className = "dica";
+  }
+}
+function abrirModalBaixa(skuPre) {
+  if (!(DADOS.estoque || []).length) { toast("Cadastre um vinho no Estoque antes"); return; }
+  const f = $("#form-baixa"); f.reset();
+  f.data.value = hojeISO();
+  const filtro = ($("#fin-pdv") && $("#fin-pdv").value) || "__todas__";
+  $("#baixa-pdv").innerHTML = opcoesPdv();
+  $("#baixa-pdv").value = (filtro && filtro !== "__todas__") ? filtro : pdvAtual;
+  $("#baixa-motivo").innerHTML = MOTIVOS_BAIXA.map((m) => `<option value="${escaparAttr(m)}">${escaparHtml(m)}</option>`).join("");
+  f.origem.value = "adega";
+  f.qtd.value = 1;
+  // Reusa a lista da venda avulsa: mostra o disponível de cada lugar.
+  $("#baixa-sku").innerHTML = opcoesVinhoAvulsa(f.pdv.value, f.origem.value === "retaguarda" ? "avulsa-retaguarda" : "avulsa-adega");
+  if (skuPre && [...f.sku.options].some((o) => o.value === skuPre)) f.sku.value = skuPre;
+  atualizarBaixa();
+  abrir("#modal-baixa");
+}
+$("#btn-add-baixa").addEventListener("click", () => abrirModalBaixa());
+["#baixa-pdv", "#baixa-origem"].forEach((s) => $(s).addEventListener("change", () => {
+  const f = $("#form-baixa");
+  const antes = f.sku.value;
+  $("#baixa-sku").innerHTML = opcoesVinhoAvulsa(f.pdv.value, f.origem.value === "retaguarda" ? "avulsa-retaguarda" : "avulsa-adega");
+  if (antes && [...f.sku.options].some((o) => o.value === antes)) f.sku.value = antes;
+  atualizarBaixa();
+}));
+$("#baixa-sku").addEventListener("change", atualizarBaixa);
+["qtd"].forEach((n) => $("#form-baixa")[n].addEventListener("input", atualizarBaixa));
+$("#form-baixa").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const b = {
+    data: f.data.value || hojeISO(), pdv: f.pdv.value, sku: f.sku.value, origem: f.origem.value,
+    motivo: f.motivo.value || "Outro", descricao: f.descricao.value.trim(),
+    qtd: Math.floor(Number(f.qtd.value) || 0),
+  };
+  if (!b.sku) { toast("Escolha o vinho"); return; }
+  if (b.qtd <= 0) { toast("Informe a quantidade"); return; }
+  const it = DADOS.estoque.find((x) => x.sku === b.sku);
+  const disp = b.origem === "retaguarda" ? (it ? Number(it.qtd) || 0 : 0) : qtdNoPdv(b.sku, b.pdv);
+  if (b.qtd > disp) { toast(`Só há ${disp} disponível — ajuste a quantidade`); return; }
+  await comProgresso(() => registrarBaixa(b));
+  fechar("#modal-baixa"); renderGiro(); toast("Baixa registrada ✓");
 });
 
 // ======================================================================

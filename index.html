@@ -94,6 +94,10 @@
       <div id="fin-avulsas" class="fin-despesas"></div>
     </div>
     <div class="fin-secao">
+      <div class="fin-secao-topo"><h3>Baixas de estoque</h3><button class="btn-secundario" id="btn-add-baixa">＋ Baixa</button></div>
+      <div id="fin-baixas" class="fin-despesas"></div>
+    </div>
+    <div class="fin-secao">
       <div class="fin-secao-topo"><h3>Despesas do período</h3><button class="btn-secundario" id="btn-add-despesa">＋ Despesa</button></div>
       <div id="fin-despesas" class="fin-despesas"></div>
     </div>
@@ -513,6 +517,37 @@
         </div>
         <p class="dica" id="avulsa-resumo"></p>
         <div class="form-botoes"><button type="submit" class="btn-primario">Registrar venda</button></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ====================== MODAL: BAIXA DE ESTOQUE ====================== -->
+  <div id="modal-baixa" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-conteudo">
+      <div class="modal-topo">
+        <h2>Baixa de estoque</h2>
+        <button class="modal-fechar" data-fecha aria-label="Fechar">✕</button>
+      </div>
+      <form id="form-baixa" class="form">
+        <p class="dica">Garrafa que saiu <b>sem ser vendida</b>: degustação, quebra, vencida, brinde. O custo entra no <b>lucro líquido</b> e a garrafa sai do estoque.</p>
+        <div class="form-linha">
+          <label>Data <input name="data" type="date" required /></label>
+          <label>Adega <select name="pdv" id="baixa-pdv"></select></label>
+        </div>
+        <label>Motivo <select name="motivo" id="baixa-motivo"></select></label>
+        <label>Vinho <select name="sku" id="baixa-sku" required></select></label>
+        <label>De onde saiu a garrafa
+          <select name="origem" id="baixa-origem">
+            <option value="adega">Da adega (estava à venda na máquina)</option>
+            <option value="retaguarda">Da retaguarda (estoque guardado)</option>
+          </select>
+        </label>
+        <div class="form-linha">
+          <label>Quantidade <input name="qtd" type="number" min="1" step="1" inputmode="numeric" required value="1" /></label>
+          <label>Observação <input name="descricao" placeholder="Opcional: prova com cliente" /></label>
+        </div>
+        <p class="dica" id="baixa-resumo"></p>
+        <div class="form-botoes"><button type="submit" class="btn-primario">Registrar baixa</button></div>
       </form>
     </div>
   </div>

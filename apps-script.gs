@@ -30,6 +30,7 @@ var ABA_PDVS = "Pdvs";           // Fase 4: pontos de venda (adegas)
 var ABA_PDV_ESTOQUE = "PdvEstoque"; // Fase 4: quantidade de cada rótulo em cada adega
 var ABA_VENDAS = "Vendas";       // Fase 4: histórico de vendas por período (giro)
 var ABA_DESPESAS = "Despesas";   // Fase 5: despesas por adega (para o lucro líquido)
+var ABA_BAIXAS = "Baixas";       // Garrafa que saiu SEM VENDA: degustação, quebra, vencido, brinde…
 
 // Colunas de cada aba. As colunas novas da Fase 4 (codigo, codigoBarras, categoria,
 // precoVenda) ficam NO FIM da lista do estoque — assim o "auto-heal" só as ACRESCENTA
@@ -47,6 +48,10 @@ var COL_PDV_ESTOQUE = ["pdv","sku","qtd","minimo","nivelPar","precoVenda"];
 //   "avulsa-retaguarda"  -> venda manual, garrafa saiu do estoque guardado
 var COL_VENDAS = ["periodoInicio","periodoFim","importadoEm","pdv","sku","codigo","descricao","categoria","qtd","precoMedio","valorVendido","origem"];
 var COL_DESPESAS = ["data","pdv","categoria","descricao","valor"];
+// Baixa de estoque sem venda. `custoUnit`/`valor` são GRAVADOS no momento da
+// baixa (foto do custo de então) — se o preço de aquisição mudar depois, a
+// perda registrada não muda. `origem` = de onde a garrafa saiu.
+var COL_BAIXAS = ["data","pdv","sku","qtd","motivo","descricao","custoUnit","valor","origem"];
 
 // ---------------------------------------------------------------- utilidades
 function _prop(nome) { return PropertiesService.getScriptProperties().getProperty(nome) || ""; }
@@ -140,11 +145,16 @@ function doGet(e) {
       if (r.data instanceof Date) r.data = Utilities.formatDate(r.data, "GMT", "yyyy-MM-dd");
       return r;
     });
+    var baixas = _lerAba(ABA_BAIXAS, COL_BAIXAS).map(function (r) {
+      r.qtd = _num(r.qtd); r.custoUnit = _num(r.custoUnit); r.valor = _num(r.valor);
+      if (r.data instanceof Date) r.data = Utilities.formatDate(r.data, "GMT", "yyyy-MM-dd");
+      return r;
+    });
     var guia = [];
     var pg = (e && e.parameter) ? e.parameter : {};
     try { guia = lerGuia(pg.guiaId, pg.guiaGid).guia; } catch (eg) { guia = []; } // nunca deixa o guia quebrar a carga
     return _json({ estoque: estoque, compras: compras, fornecedores: fornecedores, precos: precos, lojas: lojas,
-      pdvs: pdvs, pdvEstoque: pdvEstoque, vendas: vendas, despesas: despesas, guia: guia });
+      pdvs: pdvs, pdvEstoque: pdvEstoque, vendas: vendas, despesas: despesas, baixas: baixas, guia: guia });
   } catch (err) {
     return _json({ erro: String(err.message || err) });
   }
@@ -175,6 +185,8 @@ function doPost(e) {
       case "excluirDespesa":   r = excluirDespesa(body.linha); break;
       case "excluirVenda":     r = excluirVenda(body.venda); break;
       case "registrarVendaManual": r = registrarVendaManual(body.venda); break;
+      case "registrarBaixa":   r = registrarBaixa(body.baixa); break;
+      case "excluirBaixa":     r = excluirBaixa(body.baixa); break;
       case "excluirVendasPeriodo": r = excluirVendasPeriodo(body.pdv, body.periodoInicio, body.periodoFim); break;
       case "salvarVinhoGuia":  r = salvarVinhoGuia(body.vinho, body.idOriginal, body.guiaId, body.guiaGid); break;
       case "excluirVinhoGuia": r = excluirVinhoGuia(body.id, body.guiaId, body.guiaGid); break;
@@ -265,6 +277,60 @@ function excluirDespesa(linha) {
   var sh = _aba(ABA_DESPESAS, COL_DESPESAS);
   if (linha <= sh.getLastRow()) sh.deleteRow(linha);
   return { ok: true };
+}
+
+// BAIXA DE ESTOQUE SEM VENDA (degustação, quebra, vencido, brinde, consumo).
+// Grava a baixa e desconta do lugar de onde a garrafa saiu. O custo entra no
+// lucro líquido como uma linha própria do DRE (o app soma as baixas do período),
+// então NÃO criamos uma linha na aba Despesas — assim não há risco de a despesa
+// e a baixa saírem de sincronia ao excluir uma delas.
+function registrarBaixa(baixa) {
+  baixa = baixa || {};
+  var sku = String(baixa.sku || "");
+  var pdv = String(baixa.pdv || "");
+  if (!sku) throw new Error("Baixa sem rótulo (sku).");
+  if (!pdv) throw new Error("Baixa sem adega.");
+  var qtd = _num(baixa.qtd);
+  if (qtd <= 0) throw new Error("Quantidade da baixa deve ser maior que zero.");
+  _garantePdv(pdv);
+  var daRetaguarda = String(baixa.origem) === "retaguarda";
+  var custoUnit = _num(baixa.custoUnit);
+  var sh = _aba(ABA_BAIXAS, COL_BAIXAS);
+  sh.appendRow(_objParaLinha({
+    data: _fmtData(baixa.data) || Utilities.formatDate(new Date(), "GMT-3", "yyyy-MM-dd"),
+    pdv: pdv, sku: sku, qtd: qtd, motivo: baixa.motivo || "Outro", descricao: baixa.descricao || "",
+    custoUnit: custoUnit, valor: custoUnit * qtd, origem: daRetaguarda ? "retaguarda" : "adega",
+  }, COL_BAIXAS));
+  if (daRetaguarda) _addEstoqueQtd(sku, -qtd);
+  else _setPdvEstoque(pdv, sku, { qtd: Math.max(0, _qtdPdv(pdv, sku) - qtd) });
+  return { ok: true };
+}
+// Exclui a baixa e DEVOLVE a garrafa de onde ela saiu.
+// Casa pelo CONTEÚDO (não pelo número da linha) porque a baixa pode ter sido
+// criada nesta mesma sessão, quando o app ainda não sabe em que linha ela caiu.
+function excluirBaixa(baixa) {
+  if (!baixa) return { ok: true };
+  var sh = _aba(ABA_BAIXAS, COL_BAIXAS);
+  var todas = _lerAba(ABA_BAIXAS, COL_BAIXAS);
+  var removida = null, manter = [];
+  for (var i = 0; i < todas.length; i++) {
+    if (!removida && _mesmaBaixa(todas[i], baixa)) { removida = todas[i]; continue; }
+    manter.push(todas[i]);
+  }
+  if (removida) {
+    if (removida.sku) {
+      if (String(removida.origem) === "retaguarda") _addEstoqueQtd(removida.sku, _num(removida.qtd));
+      else _setPdvEstoque(removida.pdv, removida.sku, { qtd: _qtdPdv(removida.pdv, removida.sku) + _num(removida.qtd) });
+    }
+    _regravaAba(sh, COL_BAIXAS, manter);
+  }
+  return { ok: true, removidas: removida ? 1 : 0 };
+}
+function _mesmaBaixa(a, b) {
+  return _fmtData(a.data) === _fmtData(b.data) && String(a.pdv) === String(b.pdv) &&
+    String(a.sku) === String(b.sku) && _num(a.qtd) === _num(b.qtd) &&
+    String(a.motivo) === String(b.motivo) && String(a.origem) === String(b.origem) &&
+    _num(a.valor) === _num(b.valor);
 }
 
 function _acharLinhaPorNome(sh, nome) {

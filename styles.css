@@ -665,3 +665,12 @@ body {
 .rel-barra-fill { display: block; height: 100%; min-width: 3px; background: var(--dourado); border-radius: 0 4px 4px 0; }
 .rel-barra-extra { margin-top: 5px; font-size: 12px; color: var(--texto-suave); }
 .rel-pos { display: inline-block; min-width: 22px; font-size: 12px; font-weight: 700; color: var(--texto-suave); }
+
+/* Baixas de estoque (degustação, quebra…): cabeçalho de cada motivo */
+.baixa-grupo {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+  margin: 10px 0 2px; padding: 0 2px; font-size: 13px; color: var(--dourado-claro); font-weight: 700;
+}
+.baixa-grupo b { color: var(--texto); font-size: 12px; font-weight: 700; white-space: nowrap; }
+/* Subtítulo dentro de um bloco dos Relatórios */
+.rel-sub { margin: 14px 0 2px; font-size: 12px; font-weight: 700; color: var(--texto-suave); text-transform: uppercase; letter-spacing: .04em; }
