@@ -1373,42 +1373,72 @@ function atualizarJaImportados(pdv) {
   atualizarPeriodoLabel();
   atualizarJaImportados($("#conf-vendas-pdv").value || pdvAtual);
 }));
+function estaNaAdega(sku, pdv) { return !!linhaPdv(sku, pdv); }
+// Opções de rótulo para relacionar uma venda: os DA ADEGA em destaque, depois os outros.
+function opcoesRotuloVendas(l, pdv) {
+  const naAdega = [], outros = [];
+  (DADOS.estoque || []).slice().sort((a, b) => String(a.nome).localeCompare(String(b.nome))).forEach((it) => {
+    const emAdega = estaNaAdega(it.sku, pdv);
+    const sel = (!l.criarNovo && l.skuAlvo === it.sku) ? "selected" : "";
+    const rot = escaparHtml(it.nome || it.sku) + (emAdega ? ` (adega: ${qtdNoPdv(it.sku, pdv)})` : "");
+    const opt = `<option value="${escaparAttr(it.sku)}" ${sel}>${rot}</option>`;
+    (emAdega ? naAdega : outros).push(opt);
+  });
+  let html = "";
+  if (naAdega.length) html += `<optgroup label="Nesta adega">${naAdega.join("")}</optgroup>`;
+  if (outros.length) html += `<optgroup label="Outros rótulos (não estão nesta adega)">${outros.join("")}</optgroup>`;
+  html += `<option value="__novo__" ${l.criarNovo ? "selected" : ""}>＋ Criar rótulo novo</option>`;
+  return html;
+}
 function renderConfVendas() {
   const linhas = confVendas.linhas;
   const inc = linhas.filter((l) => l.incluir);
   const totUn = inc.reduce((s, l) => s + (Number(l.qtd) || 0), 0);
   const totRs = inc.reduce((s, l) => s + (Number(l.valorVendido) || 0), 0);
-  $("#conf-vendas-resumo").innerHTML = `<b>${inc.length}</b> rótulos · ${totUn} garrafas vendidas · ${brl(totRs)}`;
+  const pdv = $("#conf-vendas-pdv").value || confVendas.pdv;
+  // Uma venda "precisa de atenção" quando não bate com um rótulo QUE CONSTA NESTA ADEGA.
+  const precisa = (l) => l.incluir && (l.criarNovo || !l.skuAlvo || !estaNaAdega(l.skuAlvo, pdv));
+  const nAviso = inc.filter(precisa).length;
+  $("#conf-vendas-resumo").innerHTML = `<b>${inc.length}</b> rótulos · ${totUn} garrafas vendidas · ${brl(totRs)}`
+    + (nAviso ? `<div class="conf-aviso-topo">⚠ ${nAviso} ${nAviso === 1 ? "venda não bate" : "vendas não batem"} com um rótulo desta adega. Relacione abaixo, ou confirme criar rótulo novo.</div>` : "");
   const cont = $("#conf-vendas-lista");
   cont.innerHTML = "";
-  const pdv = $("#conf-vendas-pdv").value || confVendas.pdv;
   linhas.forEach((l, idx) => {
     const casou = !l.criarNovo && l.skuAlvo;
     const naAdega = casou ? qtdNoPdv(l.skuAlvo, pdv) : 0;
     const ficará = Math.max(0, naAdega - (Number(l.qtd) || 0));
+    const forte = l.forte || l.manual;
     const badge = casou
-      ? `<span class="conf-badge ${l.forte ? "ok" : "fraco"}">→ ${escaparHtml(l.nomeAlvo)}${l.forte ? "" : " ?"}</span>`
+      ? `<span class="conf-badge ${forte ? "ok" : "fraco"}">→ ${escaparHtml(l.nomeAlvo)}${forte ? "" : " ?"}</span>`
       : `<span class="conf-badge novo">＋ novo rótulo</span>`;
-    const descHtml = casou ? `<span class="conf-desc">adega ${naAdega} → <b>${ficará}</b></span>` : "";
-    const div = el("div", "conf-linha" + (l.incluir ? "" : " off"));
+    const descHtml = casou && estaNaAdega(l.skuAlvo, pdv) ? `<span class="conf-desc">adega ${naAdega} → <b>${ficará}</b></span>` : "";
+    const aviso = precisa(l)
+      ? `<div class="conf-aviso">⚠ ${l.criarNovo || !l.skuAlvo ? "não bate com nenhum rótulo desta adega" : "esse rótulo não consta nesta adega"} — relacione:</div>`
+      : "";
+    const div = el("div", "conf-linha" + (l.incluir ? "" : " off") + (precisa(l) ? " atencao" : ""));
     div.innerHTML = `
       <label class="conf-ck"><input type="checkbox" ${l.incluir ? "checked" : ""} data-i="${idx}" /></label>
       <div class="conf-corpo">
         <div class="conf-nome">${escaparHtml(l.nome)} <small class="conf-cat">${Number(l.qtd) || 0} un. · ${brl(l.valorVendido)}</small></div>
-        <div class="conf-sub">${badge}
-          ${l.skuAlvo ? `<button type="button" class="conf-toggle" data-t="${idx}">${l.criarNovo ? "casar" : "criar novo"}</button>` : ""}
-          ${descHtml}
-        </div>
+        <div class="conf-sub">${badge}${descHtml}</div>
+        ${aviso}
+        <select class="conf-rotulo" data-r="${idx}" aria-label="Relacionar venda a um rótulo">${opcoesRotuloVendas(l, pdv)}</select>
       </div>`;
     cont.appendChild(div);
   });
   cont.querySelectorAll("input[data-i]").forEach((c) => c.addEventListener("change", (e) => {
     confVendas.linhas[+e.target.dataset.i].incluir = e.target.checked; renderConfVendas();
   }));
-  cont.querySelectorAll("button[data-t]").forEach((b) => b.addEventListener("click", (e) => {
-    const l = confVendas.linhas[+e.target.dataset.t];
-    l.criarNovo = !l.criarNovo;
-    if (l.criarNovo && !l.skuNovo) l.skuNovo = gerarSku(l.nome, new Set(confVendas.linhas.map((x) => x.skuNovo).filter(Boolean)));
+  cont.querySelectorAll("select[data-r]").forEach((s) => s.addEventListener("change", (e) => {
+    const l = confVendas.linhas[+e.target.dataset.r];
+    const val = e.target.value;
+    if (val === "__novo__") {
+      l.criarNovo = true; l.skuAlvo = ""; l.nomeAlvo = ""; l.manual = false;
+      if (!l.skuNovo) l.skuNovo = gerarSku(l.nome, new Set(confVendas.linhas.map((x) => x.skuNovo).filter(Boolean)));
+    } else {
+      const it = DADOS.estoque.find((x) => x.sku === val);
+      l.criarNovo = false; l.skuAlvo = val; l.nomeAlvo = it ? it.nome : ""; l.manual = true;
+    }
     renderConfVendas();
   }));
 }
