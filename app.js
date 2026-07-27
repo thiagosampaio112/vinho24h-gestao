@@ -1204,7 +1204,7 @@ async function lerNotaIA(base64, mime) {
   };
   const resp = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const json = await resp.json();
-  if (json.error) throw new Error(json.error.message || "erro da IA");
+  if (json.error) throw new Error(erroIAamigavel(json.error.message) || "erro da IA");
   const texto = json.candidates && json.candidates[0] && json.candidates[0].content
     && json.candidates[0].content.parts && json.candidates[0].content.parts[0].text;
   if (!texto) throw new Error("a IA não retornou itens");
@@ -2581,7 +2581,7 @@ async function preencherGuiaIA(dados) {
   const body = { contents: [{ parts: [{ text: instrucao }] }], generationConfig: { temperature: 0.3, responseMimeType: "application/json" } };
   const resp = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const json = await resp.json();
-  if (json.error) throw new Error(json.error.message || "erro da IA");
+  if (json.error) throw new Error(erroIAamigavel(json.error.message) || "erro da IA");
   const texto = json.candidates && json.candidates[0] && json.candidates[0].content
     && json.candidates[0].content.parts && json.candidates[0].content.parts[0].text;
   if (!texto) throw new Error("a IA não respondeu");
@@ -2849,7 +2849,7 @@ async function editarFotoGarrafaIA(base64, mime) {
   };
   const resp = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const json = await resp.json();
-  if (json.error) throw new Error(json.error.message || "erro da IA");
+  if (json.error) throw new Error(erroIAamigavel(json.error.message) || "erro da IA");
   const parts = (json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts) || [];
   const imgPart = parts.find((p) => p.inline_data || p.inlineData);
   const dados = imgPart && (imgPart.inline_data || imgPart.inlineData);
@@ -2932,6 +2932,53 @@ $("#btn-testar").addEventListener("click", async () => {
     const nGuia = (json.guia || []).length;
     st.textContent = `✓ Conectou! ${nEst} ${nEst === 1 ? "item" : "itens"} no estoque` + (gsid ? ` · ${nGuia} no guia` : "") + ".";
   } catch (err) { st.textContent = "✗ Não conectou: " + (err.message || "confira o link/senha"); }
+});
+
+// Traduz o erro do Google para algo que a sócia consiga agir. As mensagens da
+// API vêm em inglês e falando de OAuth, o que não ajuda quem só quer publicar
+// uma foto de garrafa.
+function erroIAamigavel(msg) {
+  const m = String(msg || "");
+  if (/invalid authentication credentials|Expected OAuth 2|API key not valid|API_KEY_INVALID/i.test(m)) {
+    return "a chave da IA deste aparelho foi recusada pelo Google. Abra a engrenagem ⚙ e toque em “Testar chave da IA” para conferir — provavelmente ela está incompleta, foi apagada ou é de outro projeto";
+  }
+  if (/quota|RESOURCE_EXHAUSTED|rate limit/i.test(m)) {
+    return "a chave da IA estourou a cota do Google por agora. Espere alguns minutos e tente de novo";
+  }
+  if (/billing|BILLING_DISABLED/i.test(m)) {
+    return "esta chave da IA precisa de faturamento habilitado no Google para gerar imagem. A leitura de texto funciona, a foto não";
+  }
+  if (/PERMISSION_DENIED|has not been used in project|is disabled/i.test(m)) {
+    return "a chave da IA existe, mas não tem permissão para este recurso do Google. Confira em “Testar chave da IA”";
+  }
+  return m;
+}
+// Testa a chave listando os modelos: é uma chamada de LEITURA, não gera nada e
+// não custa. Diz três coisas de uma vez — se a chave vale, se o modelo de texto
+// está disponível e se o de imagem está.
+$("#btn-testar-ia").addEventListener("click", async () => {
+  const f = $("#form-config");
+  const chave = (f.geminiKey.value || "").trim();
+  const st = $("#ia-status");
+  if (!chave) { st.textContent = "✗ Nenhuma chave preenchida neste aparelho."; return; }
+  if (chave !== f.geminiKey.value) {
+    // Espaço sobrando na cola é uma causa real de chave recusada.
+    f.geminiKey.value = chave;
+  }
+  st.textContent = "Testando a chave…";
+  try {
+    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(chave)}&pageSize=200`, { cache: "no-store" });
+    const json = await resp.json();
+    if (json.error) throw new Error(json.error.message || "erro do Google");
+    const nomes = (json.models || []).map((m) => String(m.name || "").replace(/^models\//, ""));
+    const temTexto = nomes.some((n) => n.indexOf(MODELO_IA) === 0);
+    const temImagem = nomes.some((n) => n.indexOf(MODELO_IMG) === 0);
+    if (temTexto && temImagem) st.textContent = "✓ Chave válida. Leitura de nota e ficha por IA: ok. Foto da garrafa: ok.";
+    else if (temTexto) st.textContent = `⚠ Chave válida e a leitura por IA funciona, mas o modelo de foto (${MODELO_IMG}) não está liberado para ela. Normalmente falta habilitar faturamento no projeto do Google.`;
+    else st.textContent = `⚠ Chave válida, mas nem o modelo de texto (${MODELO_IA}) aparece. Ela deve ser de outro projeto do Google.`;
+  } catch (err) {
+    st.textContent = "✗ " + erroIAamigavel(err.message || "não consegui testar");
+  }
 });
 
 $("#form-config").addEventListener("submit", async (e) => {
