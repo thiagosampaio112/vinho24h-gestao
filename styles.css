@@ -689,3 +689,10 @@ body {
 }
 .lote-x:hover { border-color: var(--vermelho); }
 .lote-add { width: 100%; padding: 11px 12px; font-size: 14px; }
+
+/* Motivo da falha na foto do guia — fica na tela até a próxima tentativa */
+.foto-erro {
+  margin: 0; padding: .5rem .6rem; font-size: 12px; line-height: 1.45;
+  color: var(--texto); background: rgba(224, 90, 107, .14);
+  border-left: 3px solid var(--vermelho); border-radius: 0 8px 8px 0;
+}

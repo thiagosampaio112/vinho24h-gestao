@@ -1118,36 +1118,73 @@ $("#input-nota").addEventListener("change", async (e) => {
   }
 });
 
-// Lê o arquivo em base64. Fotos são reduzidas (mais rápido e barato); PDF vai inteiro.
-function prepararArquivo(file) {
-  return new Promise((resolve, reject) => {
-    const ehImagem = file.type.startsWith("image/");
-    if (!ehImagem) {
-      const r = new FileReader();
-      r.onload = () => resolve({ base64: String(r.result).split(",")[1], mime: file.type || "application/pdf" });
-      r.onerror = reject;
-      r.readAsDataURL(file);
-      return;
-    }
-    // Imagem: redimensiona para no máx. 1600px no maior lado.
+function lerBase64(file) {
+  return new Promise((ok, falha) => {
     const r = new FileReader();
-    r.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const max = 1600;
-        let { width: w, height: h } = img;
-        if (w > max || h > max) { const escala = max / Math.max(w, h); w = Math.round(w * escala); h = Math.round(h * escala); }
-        const cv = document.createElement("canvas");
-        cv.width = w; cv.height = h;
-        cv.getContext("2d").drawImage(img, 0, 0, w, h);
-        resolve({ base64: cv.toDataURL("image/jpeg", 0.85).split(",")[1], mime: "image/jpeg" });
-      };
-      img.onerror = reject;
-      img.src = r.result;
-    };
-    r.onerror = reject;
+    r.onload = () => ok(String(r.result).split(",")[1]);
+    r.onerror = () => falha(new Error("não consegui ler o arquivo do aparelho"));
     r.readAsDataURL(file);
   });
+}
+// Decodifica o arquivo em algo desenhável no canvas, ou devolve null quando o
+// navegador não sabe abrir aquele formato (HEIC do iPhone no Android, p.ex.).
+// `createImageBitmap` cobre mais formatos e gasta menos memória que carregar a
+// foto inteira como dataURL — que era como fazíamos e travava em foto grande.
+async function decodificarImagem(file) {
+  if (typeof createImageBitmap === "function") {
+    try {
+      const bmp = await createImageBitmap(file);
+      return { fonte: bmp, liberar: () => { if (bmp.close) bmp.close(); } };
+    } catch (_) { /* formato que o createImageBitmap não abriu: tenta pelo <img> */ }
+  }
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, falha) => {
+      const i = new Image();
+      i.onload = () => ok(i);
+      i.onerror = () => falha(new Error("formato não suportado"));
+      i.src = url;
+    });
+    return { fonte: img, liberar: () => URL.revokeObjectURL(url) };
+  } catch (_) {
+    URL.revokeObjectURL(url);
+    return null;
+  }
+}
+// Lê o arquivo em base64 pronto para a IA. Foto é decodificada e reduzida a
+// 1600px; PDF vai inteiro.
+// NÃO confia no `file.type`: alguns seletores de galeria entregam tipo vazio (e
+// a foto caía no ramo do PDF, sendo enviada como se fosse documento) e o HEIC
+// tem tipo de imagem mas o navegador pode não saber decodificar. Nos dois casos
+// o erro chegava sem explicação nenhuma para quem estava cadastrando.
+async function prepararArquivo(file) {
+  const nome = String(file.name || "").toLowerCase();
+  const tipo = String(file.type || "");
+  if (tipo === "application/pdf" || nome.endsWith(".pdf")) {
+    return { base64: await lerBase64(file), mime: "application/pdf" };
+  }
+  const dec = await decodificarImagem(file);
+  if (!dec) {
+    if (/heic|heif/.test(tipo) || /\.(heic|heif)$/.test(nome)) {
+      throw new Error("esta foto está em HEIC, o formato do iPhone, e este aparelho não consegue abrir. Tire a foto pelo próprio app, ou mude no iPhone em Ajustes → Câmera → Formatos → Mais Compatível");
+    }
+    throw new Error("não consegui abrir este arquivo como imagem. Tente um JPG ou PNG, ou tire a foto pelo próprio app");
+  }
+  try {
+    const max = 1600;
+    let w = dec.fonte.width, h = dec.fonte.height;
+    if (!w || !h) throw new Error("a imagem veio com tamanho zero");
+    if (w > max || h > max) { const escala = max / Math.max(w, h); w = Math.round(w * escala); h = Math.round(h * escala); }
+    const cv = document.createElement("canvas");
+    cv.width = w; cv.height = h;
+    const ctx = cv.getContext("2d");
+    // Fundo branco antes de desenhar: PNG/WebP com transparência viraria PRETO no JPEG.
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(dec.fonte, 0, 0, w, h);
+    return { base64: cv.toDataURL("image/jpeg", 0.85).split(",")[1], mime: "image/jpeg" };
+  } finally {
+    dec.liberar();
+  }
 }
 
 // Chama o Gemini direto do celular (a chave fica só no aparelho).
@@ -2729,19 +2766,33 @@ $("#btn-cam-capturar").addEventListener("click", () => {
   processarFotoIA(base64, "image/jpeg");
 });
 
+// O motivo da falha fica NA TELA até a próxima tentativa. Antes só aparecia num
+// aviso de 2 segundos, então quem estava cadastrando não conseguia dizer depois
+// o que tinha dado errado.
+function erroFoto(msg) {
+  const el0 = $("#guia-foto-erro"); if (!el0) { if (msg) toast(msg); return; }
+  if (!msg) { el0.textContent = ""; el0.classList.add("hidden"); return; }
+  el0.textContent = "⚠ " + msg;
+  el0.classList.remove("hidden");
+}
 $("#input-foto-guia").addEventListener("change", async (e) => {
   const file = e.target.files && e.target.files[0];
   e.target.value = "";
   if (!file) return;
+  erroFoto("");
   try {
     const { base64, mime } = await prepararArquivo(file);
     await processarFotoIA(base64, mime);
-  } catch (err) { console.error(err); toast("Não consegui ler a foto: " + (err.message || "tente outra")); }
+  } catch (err) {
+    console.error(err);
+    erroFoto(err.message || "não consegui ler esta foto — tente outra");
+  }
 });
 
 // IA isola a garrafa → app padroniza o tamanho → mostra para aprovar.
 async function processarFotoIA(base64, mime) {
   try {
+    erroFoto("");
     $("#carregando-msg").textContent = "Deixando a garrafa no padrão (IA)…";
     abrir("#carregando");
     const editada = await editarFotoGarrafaIA(base64, mime);
@@ -2752,7 +2803,7 @@ async function processarFotoIA(base64, mime) {
     $("#guia-foto-aprovar").classList.remove("hidden");
   } catch (err) {
     fechar("#carregando"); console.error(err);
-    toast("Não consegui processar a foto: " + (err.message || "tente outra"));
+    erroFoto(err.message || "não consegui processar esta foto — tente outra");
   }
 }
 
